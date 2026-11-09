@@ -57,6 +57,90 @@ fn replace_build_block(module: &[u8]) -> (Vec<u8>, String) {
 }
 
 #[test]
+fn earlier_non_header_magic_does_not_mask_later_build_info() {
+    let original = std::fs::read(fixture("app.stripped")).unwrap();
+    let (_, control) = run_json(&fixture("app.stripped"));
+    assert_eq!(
+        control["coverage"]["build_info"],
+        serde_json::json!({
+            "state": "decoded", "expected": 1, "visited": 1,
+            "expected_observations": 1, "observations": 1, "issues": []
+        })
+    );
+    assert!(control["artifact"]["go_version"].is_string());
+    assert_eq!(control["build"]["dependencies"][0]["version"], "v1.2.3");
+
+    // Test-only ELF64 layout inspection: unused padding between occupied ranges,
+    // excluding header tables and every file-backed section.
+    assert_eq!(&original[..6], b"\x7fELF\x02\x01");
+    let word =
+        |offset| u16::from_le_bytes(original[offset..offset + 2].try_into().unwrap()) as usize;
+    let address = |offset| {
+        usize::try_from(u64::from_le_bytes(
+            original[offset..offset + 8].try_into().unwrap(),
+        ))
+        .unwrap()
+    };
+    let sections = address(40);
+    let mut occupied = vec![
+        (0, address(32) + word(54) * word(56)),
+        (sections, sections + word(58) * word(60)),
+    ];
+    occupied.extend((0..word(60)).filter_map(|index| {
+        let section = sections + index * word(58);
+        let kind = u32::from_le_bytes(original[section + 4..section + 8].try_into().unwrap());
+        let offset = address(section + 24);
+        let size = address(section + 32);
+        (kind != 8 && size != 0 && offset != 0).then_some((offset, offset + size))
+    }));
+    occupied.sort_unstable();
+    let real_header = header_offset(&original);
+    let mut occupied_end = 0;
+    let offset = occupied
+        .iter()
+        .find_map(|&(start, end)| {
+            let gap_start = occupied_end;
+            occupied_end = occupied_end.max(end);
+            let gap_end = start.min(real_header);
+            (gap_start < gap_end)
+                .then(|| {
+                    original[gap_start..gap_end]
+                        .windows(32)
+                        .position(|window| window.iter().all(|byte| *byte == 0))
+                        .map(|within| gap_start + within)
+                })
+                .flatten()
+        })
+        .expect("fixture requires safe zero padding before its build header");
+    assert!(
+        occupied
+            .iter()
+            .all(|&(start, end)| offset + 32 <= start || offset >= end)
+    );
+    assert!(offset + 32 <= real_header);
+    let mut bytes = original.clone();
+    bytes[offset..offset + MAGIC.len()].copy_from_slice(MAGIC);
+    // The pointer and flags remain zero: this occurrence is not a header.
+    assert_eq!(bytes.len(), original.len());
+    assert_eq!(&bytes[real_header..], &original[real_header..]);
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("earlier non-header literal");
+    std::fs::write(&path, &bytes).unwrap();
+    let (out, mut observed) = run_json(&path);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stderr.is_empty());
+    assert_eq!(observed["coverage"]["build_info"]["state"], "decoded");
+    assert_ne!(
+        observed["artifact"]["sha256"],
+        control["artifact"]["sha256"]
+    );
+    // Every field except the necessarily changed input digest must match control,
+    // including raw version, full identity, issues, counters and future arrays.
+    observed["artifact"]["sha256"] = control["artifact"]["sha256"].clone();
+    assert_eq!(observed, control);
+}
+
+#[test]
 fn malformed_module_records_keep_validated_evidence_and_raw_version() {
     let body = b"path\tretained/path\nmod\tretained/main\tunknown\ndep\tvalid/dep\tv1\ndep\nbuild\tvcs.time\t2026-01-02T03:04:05Z\n";
     let module = [

@@ -24,3 +24,5 @@ All notable changes to this project are documented here.
 - Missing/malformed module metadata now yields explicit partial coverage,
   preserving raw Go version and validated evidence rather than reporting a
   decoded empty module inventory.
+- Earlier non-header magic literals no longer mask intact later build-info
+  headers during checked discovery.

@@ -24,6 +24,10 @@ self-contained regression tests in the same module:
   framing and no detected record errors.
 - Bounds-check the full 32-byte header, pointer/inline flags, string positions,
   varint overflow, integer conversion and offset/length arithmetic.
+- Discover the first structurally usable header, skipping invalid magic lookalikes
+  with the same checked header validation used by decoding. Do not rank or retry
+  string/module payloads. No magic yields MissingHeader; all-invalid candidates
+  yield one deterministic InvalidHeader issue, without per-match accumulation.
 - Preserve a recovered raw Go version when subsequent module-string reads,
   framing or records fail. Preserve individually validated records from a
   framed module body; invalid records produce issues rather than fabricated

@@ -66,12 +66,8 @@ impl BuildInfo {
     /// Decode with explicit loss/error status, retaining any recovered raw version.
     pub fn parse_checked(bin: &GoBinary) -> BuildInfoDecode {
         match find_buildinfo(&bin.bytes) {
-            Some(offset) => decode(bin, offset),
-            None => failed(
-                None,
-                BuildInfoIssueKind::MissingHeader,
-                "buildinfo header not found",
-            ),
+            Ok(offset) => decode(bin, offset),
+            Err(issue) => failed(None, issue.kind, issue.message),
         }
     }
 
@@ -148,37 +144,54 @@ fn failed(
     }
 }
 
-fn find_buildinfo(bytes: &[u8]) -> Option<usize> {
-    bytes
-        .windows(MAGIC.len())
-        .position(|window| window == MAGIC)
+fn find_buildinfo(bytes: &[u8]) -> std::result::Result<usize, BuildInfoDecodeIssue> {
+    let mut first_invalid = None;
+    for (offset, window) in bytes.windows(MAGIC.len()).enumerate() {
+        if window != MAGIC {
+            continue;
+        }
+        match checked_header_end(bytes, offset) {
+            Ok(_) => return Ok(offset),
+            Err(message) => {
+                // Keep one deterministic diagnostic, not one allocation per match.
+                first_invalid.get_or_insert_with(|| BuildInfoDecodeIssue {
+                    kind: BuildInfoIssueKind::InvalidHeader,
+                    message: message.into(),
+                });
+            }
+        }
+    }
+    Err(first_invalid.unwrap_or_else(|| BuildInfoDecodeIssue {
+        kind: BuildInfoIssueKind::MissingHeader,
+        message: "buildinfo header not found".into(),
+    }))
 }
 
-fn decode(bin: &GoBinary, header_offset: usize) -> BuildInfoDecode {
-    let Some(end) = header_offset.checked_add(32) else {
-        return failed(
-            None,
-            BuildInfoIssueKind::InvalidHeader,
-            "buildinfo header offset overflows",
-        );
-    };
-    let Some(header) = bin.bytes.get(header_offset..end) else {
-        return failed(
-            None,
-            BuildInfoIssueKind::InvalidHeader,
-            "buildinfo header is truncated",
-        );
-    };
+fn checked_header_end(
+    bytes: &[u8],
+    header_offset: usize,
+) -> std::result::Result<usize, &'static str> {
+    let end = header_offset
+        .checked_add(32)
+        .ok_or("buildinfo header offset overflows")?;
+    let header = bytes
+        .get(header_offset..end)
+        .ok_or("buildinfo header is truncated")?;
     let ptrsize = header[MAGIC.len()];
     let flags = header[MAGIC.len() + 1];
     if !matches!(ptrsize, 4 | 8) || flags & !3 != 0 || flags & FLAG_VARINT_STRINGS == 0 {
-        return failed(
-            None,
-            BuildInfoIssueKind::InvalidHeader,
+        return Err(
             "invalid or unsupported buildinfo pointer size/flags (inline strings required)",
         );
     }
-    decode_inline(&bin.bytes, end)
+    Ok(end)
+}
+
+fn decode(bin: &GoBinary, header_offset: usize) -> BuildInfoDecode {
+    match checked_header_end(&bin.bytes, header_offset) {
+        Ok(end) => decode_inline(&bin.bytes, end),
+        Err(message) => failed(None, BuildInfoIssueKind::InvalidHeader, message),
+    }
 }
 
 fn decode_inline(bytes: &[u8], mut pos: usize) -> BuildInfoDecode {
@@ -483,6 +496,66 @@ mod checked_tests {
     fn issue(decoded: &BuildInfoDecode, kind: BuildInfoIssueKind) {
         assert!(!decoded.complete);
         assert!(decoded.issues.iter().any(|i| i.kind == kind), "{decoded:?}");
+    }
+
+    #[test]
+    fn checked_invalid_lookalikes_do_not_mask_later_header() {
+        let body = framed(b"path\tgood\nmod\tmain\t(devel)\ndep\tdep\tv1\n");
+        let expected =
+            serde_json::to_value(BuildInfo::parse_checked(&image(&body)).info.unwrap()).unwrap();
+        for (pointer, flags) in [(0, 2), (8, 0x82), (8, 0)] {
+            let mut prefix = MAGIC.to_vec();
+            prefix.extend_from_slice(&[pointer, flags]);
+            prefix.resize(32, 0);
+            let mut b = image(&body);
+            b.bytes.splice(..0, prefix);
+            let r = BuildInfo::parse_checked(&b);
+            assert!(r.complete, "pointer={pointer}, flags={flags}: {r:?}");
+            assert!(r.issues.is_empty());
+            assert_eq!(serde_json::to_value(r.info.unwrap()).unwrap(), expected);
+            assert_eq!(
+                serde_json::to_value(BuildInfo::parse(&b).unwrap()).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn checked_all_invalid_candidates_and_no_magic_are_distinct() {
+        let mut invalid = MAGIC.to_vec();
+        invalid.extend_from_slice(&[0, 2]);
+        invalid.resize(32, 0);
+        let b = bin(invalid.repeat(1024));
+        let r = BuildInfo::parse_checked(&b);
+        issue(&r, BuildInfoIssueKind::InvalidHeader);
+        assert!(r.info.is_none());
+        assert_eq!(r.issues.len(), 1);
+        assert_eq!(
+            r.issues[0].message,
+            BuildInfo::parse_checked(&b).issues[0].message
+        );
+        assert!(BuildInfo::parse(&b).is_err());
+        let missing = BuildInfo::parse_checked(&bin(b"not Go".to_vec()));
+        issue(&missing, BuildInfoIssueKind::MissingHeader);
+        assert!(missing.info.is_none());
+        assert_eq!(missing.issues.len(), 1);
+    }
+
+    #[test]
+    fn checked_selection_does_not_retry_payload_failures() {
+        let later = image(&framed(b"path\tlater\n")).bytes;
+        let mut bad_string = image(b"");
+        bad_string.bytes[33] = 0xff;
+        bad_string.bytes.extend_from_slice(&later);
+        let r = BuildInfo::parse_checked(&bad_string);
+        issue(&r, BuildInfoIssueKind::InvalidString);
+        assert!(r.info.is_none());
+        let mut version_only = image(b"");
+        version_only.bytes.extend_from_slice(&later);
+        let r = BuildInfo::parse_checked(&version_only);
+        issue(&r, BuildInfoIssueKind::MissingModuleInfo);
+        assert_eq!(r.info.unwrap().go_version, "go-recorded");
+        assert!(BuildInfo::parse(&version_only).unwrap().path.is_none());
     }
 
     #[test]
