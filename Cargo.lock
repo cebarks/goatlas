@@ -539,8 +539,6 @@ checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 [[package]]
 name = "unstrip"
 version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cae558eb27eae38dd74ba71e129efdf23d5948cf49ae5c33a3857cc3a53a96e6"
 dependencies = [
  "clap",
  "goblin",

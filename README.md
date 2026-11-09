@@ -41,12 +41,18 @@ without deduplicating records. Unknown/development versions and embedded paths
 and `vcs.time` remain unchanged. The scanning host's input path and analysis time
 are not added. Reports may contain sensitive embedded provenance.
 
-The parser is pinned to published `unstrip =1.2.0` (no local patch).
-Unsupported targets and metadata/parser failures yield an unavailable report with
-issues, not a clean empty inventory. Build-info extraction currently depends on
-the parser opening Go metadata, so damaged prerequisite metadata can prevent it.
-Parser/compiler coverage is limited; recognizing a container does not establish
-support for its Go metadata.
+The parser is pinned to `unstrip =1.2.0` with the local `strict-buildinfo-v1`
+checked build-info patch. Its upstream checksum, revision, licenses, exact patch
+scope and replacement criteria are documented in [vendor/unstrip/PATCHES.md](vendor/unstrip/PATCHES.md).
+Unsupported targets and unrecovered metadata yield unavailable coverage with
+issues, not a clean empty inventory. When a raw Go version survives but module
+metadata is missing or malformed, build-info coverage is partial: the raw version
+and any validated module/path/setting evidence survive, with explicit issues.
+Version-only recovery has a null build identity, never a decoded module walk.
+Build-info extraction still depends on the parser opening Go metadata, so damaged
+prerequisite metadata can prevent it. Parser/compiler coverage is limited; this
+patch is not a crash-proof parsing claim, and recognizing a container does not
+establish support for its Go metadata.
 
 Decoded coverage describes traversal of recorded metadata, not source-version
 proof, runtime reachability, vulnerability affectedness, or proven absence.
@@ -67,7 +73,8 @@ prerequisite, never a skipped test. No external Go modules are needed:
 just fixtures-base  # builds unstripped/stripped Linux amd64 fixtures; never runs them
 just fixtures
 just test           # fixtures, cargo test --locked
-just check          # test, formatting, Clippy with warnings denied
+just patch-check    # full vendor formatting, locked library tests, strict library Clippy
+just check          # test, patch-check, application formatting and strict Clippy
 ```
 
 Fixture recipes require a working local `go version` before changing outputs.

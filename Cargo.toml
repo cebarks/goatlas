@@ -12,3 +12,6 @@ thiserror = "2"
 
 [dev-dependencies]
 tempfile = "3"
+
+[patch.crates-io]
+unstrip = { path = "vendor/unstrip" }

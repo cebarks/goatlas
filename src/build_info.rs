@@ -1,15 +1,62 @@
 use crate::report::*;
 
-pub(crate) fn extract_build_info(
-    bin: &unstrip::GoBinary,
-) -> Result<(String, BuildIdentity), Issue> {
-    let raw = unstrip::BuildInfo::parse(bin).map_err(|error| Issue {
-        code: "build_info_unavailable".into(),
-        message: error.to_string(),
+pub(crate) struct BuildWalk {
+    pub(crate) version: Option<String>,
+    pub(crate) identity: Option<BuildIdentity>,
+    pub(crate) coverage: Coverage,
+}
+
+pub(crate) fn extract_build_info(bin: &unstrip::GoBinary) -> BuildWalk {
+    let decoded = unstrip::BuildInfo::parse_checked(bin);
+    let recovered = decoded.info.is_some();
+    let state = if !recovered {
+        CoverageState::Unavailable
+    } else if decoded.complete {
+        CoverageState::Decoded
+    } else {
+        CoverageState::Partial
+    };
+    let version = decoded.info.as_ref().map(|raw| raw.go_version.clone());
+    let identity = decoded
+        .info
+        .as_ref()
+        .filter(|raw| {
+            raw.path.is_some()
+                || raw.main.is_some()
+                || !raw.deps.is_empty()
+                || !raw.replaces.is_empty()
+                || !raw.settings.is_empty()
+        })
+        .map(identity_from);
+    BuildWalk {
+        version,
+        identity,
+        coverage: Coverage {
+            state,
+            expected: recovered.then_some(1),
+            visited: u64::from(recovered),
+            expected_observations: recovered.then_some(1),
+            observations: u64::from(recovered),
+            issues: decoded.issues.into_iter().map(issue_from).collect(),
+        },
+    }
+}
+
+fn issue_from(issue: unstrip::buildinfo::BuildInfoDecodeIssue) -> Issue {
+    use unstrip::buildinfo::BuildInfoIssueKind;
+    let kind = match issue.kind {
+        BuildInfoIssueKind::MissingHeader => "missing_header",
+        BuildInfoIssueKind::InvalidHeader => "invalid_header",
+        BuildInfoIssueKind::InvalidString => "invalid_string",
+        BuildInfoIssueKind::MissingModuleInfo => "missing_module_info",
+        BuildInfoIssueKind::InvalidModuleInfo => "invalid_module_info",
+    };
+    Issue {
+        code: format!("build_info_{kind}"),
+        message: issue.message,
         function: None,
         entry: None,
-    })?;
-    Ok((raw.go_version.clone(), identity_from(&raw)))
+    }
 }
 
 fn identity_from(raw: &unstrip::BuildInfo) -> BuildIdentity {

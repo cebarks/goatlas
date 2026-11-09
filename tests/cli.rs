@@ -21,6 +21,23 @@ fn module_report_preserves_identity_as_coverage_advances() {
 }
 
 #[test]
+fn extractor_patch_identity_is_explicit() {
+    let (_, j) = run_json(&fixture("app.stripped"));
+    assert_eq!(j["producer"]["extractor_version"], "1.2.0");
+    assert_eq!(j["producer"]["extractor_patch"], "strict-buildinfo-v1");
+    assert_eq!(j["coverage"]["build_info"]["expected"], 1);
+    assert_eq!(j["coverage"]["build_info"]["visited"], 1);
+    assert_eq!(j["coverage"]["build_info"]["expected_observations"], 1);
+    assert_eq!(j["coverage"]["build_info"]["observations"], 1);
+    assert!(
+        j["coverage"]["build_info"]["issues"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn same_bytes_at_different_paths_produce_identical_json() {
     let tmp = tempfile::tempdir().unwrap();
     let a = tmp.path().join("first copy");

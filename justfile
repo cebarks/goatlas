@@ -18,6 +18,14 @@ fixtures-base:
 test: fixtures
     cargo test --locked
 
-check: test
+patch-check:
+    #!/bin/sh
+    set -eu
+    export CARGO_TARGET_DIR="{{justfile_directory()}}/target/vendor-unstrip"
+    cargo fmt --manifest-path vendor/unstrip/Cargo.toml --all -- --check
+    cargo test --manifest-path vendor/unstrip/Cargo.toml --locked --lib
+    cargo clippy --manifest-path vendor/unstrip/Cargo.toml --locked --lib -- -D warnings
+
+check: test patch-check
     cargo fmt --all -- --check
     cargo clippy --locked --all-targets -- -D warnings

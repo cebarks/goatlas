@@ -51,7 +51,7 @@ pub fn scan_bytes(bytes: Vec<u8>) -> Result<Inventory, ScanError> {
         producer: Producer {
             tool_version: env!("CARGO_PKG_VERSION").into(),
             extractor_version: "1.2.0".into(),
-            extractor_patch: None,
+            extractor_patch: Some("strict-buildinfo-v1".into()),
         },
         artifact: Artifact {
             sha256: Sha256::digest(&bytes)
@@ -110,21 +110,10 @@ fn recover_build(bytes: Vec<u8>, report: &mut Inventory) {
             return;
         }
     };
-    match build_info::extract_build_info(&bin) {
-        Ok((version, build)) => {
-            report.artifact.go_version = Some(version);
-            report.build = Some(build);
-            report.coverage.build_info = Coverage {
-                state: CoverageState::Decoded,
-                expected: Some(1),
-                visited: 1,
-                expected_observations: Some(1),
-                observations: 1,
-                issues: vec![],
-            };
-        }
-        Err(issue) => report.coverage.build_info.issues = vec![issue],
-    }
+    let walk = build_info::extract_build_info(&bin);
+    report.artifact.go_version = walk.version;
+    report.build = walk.identity;
+    report.coverage.build_info = walk.coverage;
 }
 
 fn unavailable(code: &str, message: impl Into<String>) -> Coverage {
@@ -210,6 +199,33 @@ mod tests {
         assert!(!is_supported_target("elf", "arm64", 64, true));
         assert!(!is_supported_target("elf", "x86-64", 32, true));
         assert!(!is_supported_target("elf", "x86-64", 64, false));
+    }
+
+    #[test]
+    fn short_build_header_does_not_unwind() {
+        let mut bytes = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/target/fixtures/app.stripped"
+        ))
+        .expect("run just fixtures");
+        let magic = b"\xff Go buildinf:";
+        let offset = bytes.windows(magic.len()).position(|w| w == magic).unwrap();
+        bytes[offset] = 0;
+        bytes.extend_from_slice(magic);
+        bytes.extend_from_slice(&[8, 2]);
+        let report = scan_bytes(bytes).expect("invalid header must produce a report, not unwind");
+        assert_eq!(report.coverage.build_info.state, CoverageState::Unavailable);
+        assert_eq!(report.coverage.build_info.expected, None);
+        assert_eq!(report.coverage.build_info.visited, 0);
+        assert_eq!(report.coverage.build_info.expected_observations, None);
+        assert_eq!(report.coverage.build_info.observations, 0);
+        assert_eq!(
+            report.coverage.build_info.issues[0].code,
+            "build_info_invalid_header"
+        );
+        assert!(report.artifact.go_version.is_none());
+        assert!(report.build.is_none());
+        assert_eq!(exit_code(&report), 2);
     }
 
     #[test]
