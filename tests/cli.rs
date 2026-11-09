@@ -10,7 +10,7 @@ fn module_report_preserves_identity_as_coverage_advances() {
     assert_eq!(out.status.code(), Some(2));
     assert_eq!(j["schema_version"], 1);
     assert_eq!(j["coverage"]["build_info"]["state"], "decoded");
-    assert_eq!(j["coverage"]["functions"]["state"], "unavailable");
+    assert_eq!(j["coverage"]["functions"]["state"], "decoded");
     assert_eq!(j["coverage"]["inlining"]["state"], "unavailable");
     assert_eq!(
         j["build"]["dependencies"][0]["path"],

@@ -1,4 +1,4 @@
-fixtures: fixtures-base
+fixtures: fixtures-base fixtures-pie
 
 fixtures-base:
     #!/bin/sh
@@ -14,6 +14,16 @@ fixtures-base:
     export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
     go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/golang-symbol/fixture=-m=2' -o ../../../target/fixtures/app.unstripped . 2> ../../../target/fixtures/unstripped.compiler.log
     go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/golang-symbol/fixture=-m=2' -ldflags='-s -w' -o ../../../target/fixtures/app.stripped . 2> ../../../target/fixtures/stripped.compiler.log
+
+fixtures-pie:
+    #!/bin/sh
+    set -eu
+    export GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off
+    go version
+    mkdir -p target/fixtures
+    cd tests/fixtures/app
+    export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
+    go build -mod=readonly -trimpath -buildvcs=false -buildmode=pie -ldflags='-s -w' -o ../../../target/fixtures/app.pie.stripped .
 
 test: fixtures
     cargo test --locked

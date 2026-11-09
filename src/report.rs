@@ -67,7 +67,7 @@ pub struct FunctionObservation {
     pub start_line: Option<u32>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ModuleRef {
     pub kind: ModuleKind,
     pub path: String,
@@ -75,7 +75,7 @@ pub struct ModuleRef {
     pub basis: String,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModuleKind {
     Main,

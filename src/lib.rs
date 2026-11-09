@@ -1,4 +1,5 @@
 mod build_info;
+mod functions;
 pub mod report;
 
 use report::*;
@@ -70,7 +71,7 @@ pub fn scan_bytes(bytes: Vec<u8>) -> Result<Inventory, ScanError> {
             build_info: unavailable("not_attempted", "Build identity has not been inspected"),
             functions: unavailable(
                 "not_attempted",
-                "Function recovery is not implemented in this slice",
+                "Function recovery was not reached for this input",
             ),
             inlining: unavailable(
                 "not_attempted",
@@ -78,11 +79,11 @@ pub fn scan_bytes(bytes: Vec<u8>) -> Result<Inventory, ScanError> {
             ),
         },
     };
-    recover_build(bytes, &mut report);
+    recover_evidence(bytes, &mut report);
     Ok(report)
 }
 
-fn recover_build(bytes: Vec<u8>, report: &mut Inventory) {
+fn recover_evidence(bytes: Vec<u8>, report: &mut Inventory) {
     let probe = match unstrip::probe(&bytes) {
         Ok(probe) => probe,
         Err(error) => {
@@ -103,10 +104,9 @@ fn recover_build(bytes: Vec<u8>, report: &mut Inventory) {
     let bin = match unstrip::GoBinary::parse(bytes) {
         Ok(bin) => bin,
         Err(error) => {
-            report.coverage.build_info = unavailable(
-                "go_metadata_unavailable",
-                format!("Go metadata prerequisite failed: {error}"),
-            );
+            let message = format!("Go metadata prerequisite failed: {error}");
+            report.coverage.build_info = unavailable("go_metadata_unavailable", message.clone());
+            report.coverage.functions = unavailable("go_metadata_unavailable", message);
             return;
         }
     };
@@ -114,6 +114,28 @@ fn recover_build(bytes: Vec<u8>, report: &mut Inventory) {
     report.artifact.go_version = walk.version;
     report.build = walk.identity;
     report.coverage.build_info = walk.coverage;
+    // Build-info partial/unavailable alone never suppresses recoverable
+    // function evidence. One Pclntab and one owned package Attribution stay
+    // alive here for this walk and the later inline walk.
+    match unstrip::Pclntab::parse(&bin) {
+        Ok(pcln) => {
+            let mut attribution = functions::Attribution::new(report.build.as_ref());
+            let walk = functions::collect_functions(&bin, &pcln, &mut attribution);
+            debug_assert_eq!(
+                walk.entries.len(),
+                walk.observations.len(),
+                "body-validated entries parallel the reported observations"
+            );
+            report.functions = walk.observations;
+            report.coverage.functions = walk.coverage;
+        }
+        Err(error) => {
+            report.coverage.functions = unavailable(
+                "pclntab_unavailable",
+                format!("runtime function table could not be parsed: {error}"),
+            );
+        }
+    }
 }
 
 fn unavailable(code: &str, message: impl Into<String>) -> Coverage {

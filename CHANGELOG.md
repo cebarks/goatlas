@@ -11,8 +11,14 @@ All notable changes to this project are documented here.
 - Deterministic schema-version-1 JSON preserving module versions, replacements,
   build settings and embedded provenance.
 - Bounded 1 GiB regular-file input handling and SHA-256 of inspected bytes.
-- Explicit partial/unavailable coverage and exit semantics; function and inline
-  recovery remain unattempted.
+- Explicit partial/unavailable coverage and exit semantics; inline recovery
+  remains unattempted.
+- Retained standalone Go implementations from runtime function tables, including
+  reflection-only methods, with checked nonzero file-backed text VA spans,
+  optional file/line metadata, and conservative cached module-prefix attribution.
+  Retained code is not runtime reachability; null attribution does not erase
+  implementation evidence. Malformed/skipped rows produce incomplete coverage.
+- Stripped PIE fixtures and function-name, body-span, and layout regressions.
 - Controlled stripped/unstripped local Go fixtures and module/CLI safety tests.
 - Vendored parser provenance, licenses, self-contained checked build-info tests,
   and strict vendor formatting/library-test/Clippy gate.
