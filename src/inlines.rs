@@ -461,6 +461,36 @@ mod tests {
     }
 
     #[test]
+    fn all_trees_failing_is_partial_not_unavailable() {
+        let bin = binary("app.stripped");
+        let gofunc = locate_gofunc(&bin, Some("go1.27.3")).expect("locator works on the fixture");
+        let pcln = Pclntab::parse(&bin).unwrap().with_gofunc(gofunc);
+        let mut attribution = Attribution::new(None);
+        let mut walk = collect_functions(&bin, &pcln, &mut attribution);
+        assert!(!walk.entries.is_empty());
+        // Point every body-validated entry's `_func` struct past the table so
+        // each tree decode fails structurally. Typed issues are evidence of
+        // attempted inspection, so the walk stays partial — never
+        // unavailable, and never a decoded zero.
+        let past_end = pcln.data().len();
+        for func in &mut walk.entries {
+            func.func_off = past_end;
+        }
+        let out = collect_inlines(&bin, pcln, &walk, &mut attribution, Some("go1.27.3"));
+        assert_eq!(out.coverage.state, CoverageState::Partial);
+        assert_eq!(out.coverage.visited, 0);
+        assert_eq!(out.coverage.observations, 0);
+        assert!(out.observations.is_empty());
+        assert!(out.coverage.expected_observations.is_none());
+        assert!(
+            out.coverage
+                .issues
+                .iter()
+                .all(|i| i.code.starts_with("inline_"))
+        );
+    }
+
+    #[test]
     fn unresolved_name_is_retained_with_partial_coverage() {
         let bin = binary("app.stripped");
         let gofunc = locate_gofunc(&bin, Some("go1.27.3")).expect("locator works on the fixture");
