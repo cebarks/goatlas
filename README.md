@@ -78,13 +78,26 @@ code-presence evidence. The walker's returned row count is cross-checked against
 the table header count; skipped malformed rows, unreadable names and unverified
 body spans yield partial coverage with explicit issues, never a silently
 shortened "decoded" walk.
+For externally linked PIE builds (CGO with `-linkmode=external`), the pclntab
+header's `textStart` is zero in the file — the runtime fills it by relocation —
+and the vendored parser falls back to the first executable section's address,
+which precedes the Go text once C runtime init/PLT sections are present. For
+such binaries the reported `entry` and `container_entry` virtual addresses are
+shifted accordingly, and spans crossing those sections are conservatively
+rejected. Function and inline identity, sizes and file/line evidence are
+unaffected (they are entryOff- and funcdata-relative). The measured impact on
+the first Red Hat artifact and the pending vendor-patch decision are recorded
+in [docs/validation/first-artifact.md](docs/validation/first-artifact.md).
 
 Decoded coverage describes traversal of recorded metadata, not source-version
 proof, runtime reachability, vulnerability affectedness, or proven absence.
 A replacement is separate evidence, not a substitution of the original release.
 This tool makes no binary-wide completeness claim. Standalone function evidence
 is independent of optional build identity and module attribution.
-Representative Red Hat artifact acceptance is pending.
+The first representative Red Hat artifact run is recorded (partially closed,
+with a pending vendored-parser decision) in
+[docs/validation/first-artifact.md](docs/validation/first-artifact.md); full
+first-artifact acceptance remains pending.
 
 Inline evidence comes from the per-function `FUNCDATA_InlTree` arrays addressed
 through the moduledata `gofunc` base. Decoding is gated to the go1.20+ table
