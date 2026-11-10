@@ -107,7 +107,8 @@ fn recover_evidence(bytes: Vec<u8>, report: &mut Inventory) {
         Err(error) => {
             let message = format!("Go metadata prerequisite failed: {error}");
             report.coverage.build_info = unavailable("go_metadata_unavailable", message.clone());
-            report.coverage.functions = unavailable("go_metadata_unavailable", message);
+            report.coverage.functions = unavailable("go_metadata_unavailable", message.clone());
+            report.coverage.inlining = unavailable("go_metadata_unavailable", message);
             return;
         }
     };
@@ -224,7 +225,10 @@ mod tests {
             &r.coverage.inlining,
         ] {
             assert_eq!(c.state, CoverageState::Unavailable);
-            assert!(!c.issues.is_empty());
+            // The failure is mirrored onto every core block, including the
+            // inlining walk that was never reached, instead of leaving the
+            // generic not_attempted placeholder there.
+            assert_eq!(c.issues[0].code, "go_metadata_unavailable");
         }
     }
 
