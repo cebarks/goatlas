@@ -103,6 +103,9 @@ one containing function are distinct evidence rows and never collapse. The
 gofunc base is located by a minimal version-gated reader in the application
 because the vendored moduledata locator predates the go1.27 field moves; that
 reader shares the locator's replacement fate when upstream handles go1.27.
+Both of its layout paths are fixture-executed — the pre-1.27 word-40 path on a
+go1.25.7 build and the go1.27 word-43 path on go1.27.3 builds — but the
+intermediate 1.20-1.26 releases are layout-verified only, not fixture-executed.
 Inline coverage counts expected functions / fully checked trees and inline
 records; expected observation totals stay null when any function's tree total
 cannot be established, and a partial function walk keeps the inline walk
@@ -121,13 +124,16 @@ prerequisite, never a skipped test. No external Go modules are needed:
 just fixtures-base  # builds unstripped/stripped Linux amd64 fixtures; never runs them
 just fixtures-pie   # builds the stripped PIE fixture variant
 just fixtures-noinline  # builds the stripped fixture with package inlining disabled
-just fixtures       # fixtures-base + fixtures-pie + fixtures-noinline
+just fixtures-oldgo  # builds the stripped pre-1.27 (word-40) fixture with pinned mise go1.25.7
+just fixtures       # fixtures-base + fixtures-pie + fixtures-noinline + fixtures-oldgo
 just test           # fixtures, cargo test --locked
 just patch-check    # full vendor formatting, locked library tests, strict library Clippy
 just check          # test, patch-check, application formatting and strict Clippy
 ```
 
 Fixture recipes require a working local `go version` before changing outputs.
+The word-40 fixture additionally requires a pre-installed `mise` go1.25.7
+(`mise where go@1.25.7` must succeed; recipes never download toolchains).
 All Go commands use `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off`; builds use
 `CGO_ENABLED=0`, readonly modules, trimpath, and disabled VCS stamping.
 Compiler diagnostics and the compiler version are recorded under `target/fixtures/`.

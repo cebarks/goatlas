@@ -195,3 +195,45 @@ fn partial_tree_and_function_walk_propagate() {
     assert!(r.coverage.inlining.expected_observations.is_none());
     assert_eq!(exit_code(&r), 2);
 }
+
+/// Old-version-fixture gate: a go1.25.7 build exercises the pre-1.27
+/// moduledata layout (gofunc word 40), which no go1.27.3 fixture covers.
+#[test]
+fn word40_layout_fixture_decodes_inline_evidence() {
+    let r = scan_file(&fixture("app.word40.stripped")).unwrap();
+    assert_eq!(r.artifact.go_version.as_deref(), Some("go1.25.7"));
+    assert_eq!(r.coverage.build_info.state, CoverageState::Decoded);
+    assert_eq!(r.coverage.functions.state, CoverageState::Decoded);
+    assert_eq!(r.coverage.inlining.state, CoverageState::Decoded);
+    assert_eq!(exit_code(&r), 0);
+    assert!(r.coverage.inlining.observations > 0);
+    assert_eq!(
+        r.coverage.inlining.observations,
+        r.coverage
+            .inlining
+            .expected_observations
+            .expect("complete walk")
+    );
+    // The repeated-inlining control keeps distinct records per occurrence
+    // through the word-40 path, exactly as on the go1.27.3 fixtures.
+    let container = r
+        .functions
+        .iter()
+        .find(|f| f.raw_name == "main.twoInlineCalls")
+        .expect("fixture control")
+        .entry
+        .clone();
+    let records: Vec<&InlineOccurrence> = r
+        .inline_occurrences
+        .iter()
+        .filter(|o| o.container_entry == container)
+        .collect();
+    assert_eq!(records.len(), 2);
+    assert!(
+        records
+            .iter()
+            .all(|o| o.raw_name.as_deref() == Some("main.inlineOnly"))
+    );
+    assert_eq!(records[0].inline_index, 0);
+    assert_eq!(records[1].inline_index, 1);
+}

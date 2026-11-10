@@ -1,4 +1,4 @@
-fixtures: fixtures-base fixtures-pie fixtures-noinline
+fixtures: fixtures-base fixtures-pie fixtures-noinline fixtures-oldgo
 
 fixtures-base:
     #!/bin/sh
@@ -24,6 +24,18 @@ fixtures-pie:
     cd tests/fixtures/app
     export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
     go build -mod=readonly -trimpath -buildvcs=false -buildmode=pie -ldflags='-s -w' -o ../../../target/fixtures/app.pie.stripped .
+
+# app.word40.stripped exercises the pre-1.27 moduledata layout (gofunc at
+# word 40) using a pinned mise go1.25.7 toolchain. The install must already
+# exist (mise where never downloads); the go1.27.3 fixtures stay untouched.
+fixtures-oldgo:
+    #!/bin/sh
+    set -eu
+    mise where go@1.25.7 >/dev/null
+    mkdir -p target/fixtures
+    cd tests/fixtures/app
+    mise exec go@1.25.7 -- env GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/golang-symbol/fixture=-m=2' -ldflags='-s -w' -o ../../../target/fixtures/app.word40.stripped . 2> ../../../target/fixtures/word40.compiler.log
+    mise exec go@1.25.7 -- go version > ../../../target/fixtures/word40-go-version.txt
 
 # app.noinline compiles the fixture package with inlining disabled so its
 # own helpers stay standalone and their inline trees are genuinely empty.

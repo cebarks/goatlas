@@ -491,6 +491,30 @@ mod tests {
     }
 
     #[test]
+    fn word40_fixture_locates_gofunc_and_decodes_inline_trees() {
+        let bin = binary("app.word40.stripped");
+        // The pre-1.27 family locates the moduledata gofunc base at word 40.
+        let gofunc =
+            locate_gofunc(&bin, Some("go1.25.7")).expect("word-40 locator works on the fixture");
+        // The 1.27-gated (word-43) read of the same moduledata never yields
+        // the same base: the family gate selects a different word.
+        if let Ok(wrong_family) = locate_gofunc(&bin, Some("go1.27.3")) {
+            assert_ne!(wrong_family, gofunc);
+        }
+        let pcln = Pclntab::parse(&bin).unwrap().with_gofunc(gofunc);
+        let mut attribution = Attribution::new(None);
+        let walk = collect_functions(&bin, &pcln, &mut attribution);
+        assert_eq!(walk.coverage.state, CoverageState::Decoded);
+        let out = collect_inlines(&bin, pcln, &walk, &mut attribution, Some("go1.25.7"));
+        assert_eq!(out.coverage.state, CoverageState::Decoded);
+        assert!(out.coverage.observations > 0);
+        assert_eq!(
+            out.coverage.observations,
+            out.coverage.expected_observations.expect("complete walk")
+        );
+    }
+
+    #[test]
     fn unresolved_name_is_retained_with_partial_coverage() {
         let bin = binary("app.stripped");
         let gofunc = locate_gofunc(&bin, Some("go1.27.3")).expect("locator works on the fixture");
