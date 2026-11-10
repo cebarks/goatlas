@@ -41,10 +41,51 @@ self-contained regression tests in the same module:
 
 The application's owned BuildWalk maps complete/partial/unavailable status
 without reparsing, preserving the raw version separately from module identity.
-Producer patch identity is `strict-buildinfo-v1`, base version `1.2.0`.
-Function/inline recovery is not implemented in this slice. In particular,
-`src/inline/mod.rs` is byte-identical to the archive. This is not a general
-parser hardening or crash-proof parsing claim.
+Producer patch identity is `strict-buildinfo-v1` (build-info slice only), base
+version `1.2.0`. The inline decoder changes above are a separate patch layer
+(`strict-inline-v1`); the combined producer identity reported by the
+application after the inline slice is `strict-buildinfo-v1+strict-inline-v1`.
+This is not a general parser hardening or crash-proof parsing claim.
+
+## Functional patch: strict-inline-v1
+
+The inline decoder changes are confined to `src/inline/mod.rs`, with
+self-contained synthetic pcvalue-stream tests in the same module and
+fixture-backed regressions in the application's `tests/inline_regressions.rs`:
+
+- `decode_inline_tree_checked` returns owned `InlineTreeDecode` status with
+  typed `InlineIssueKind` issues. Complete requires a known expected entry
+  count derived from a completed PCDATA_InlTreeIndex scan, exactly that many
+  validated entries, and no suppressed errors. A genuine empty tree
+  (absent stream/slot, sentinel, or a scan that proves zero indices) is
+  complete with `Some(0)`; truncated or contradictory metadata never is.
+- Short `_func` headers, short pcdata/funcdata slot reads and unlocatable
+  trees are explicit `TruncatedFunction`/`TruncatedTree` outcomes instead of
+  `Ok(vec![])`; a later slot failure retains the count the index scan
+  already established.
+- Metadata contradictions (a counted tree with no addressable funcdata slot,
+  an absent tree with a counted pcdata stream, a tree with no index stream,
+  or a non-go1.20 table magic) are `UnsupportedLayout`, never a decoded zero.
+- A missing or zero gofunc base is `MissingGofunc`; tree addresses use
+  checked arithmetic (`AddressOverflow` replaces wrapping adds).
+- `max_pcvalue` walks pcvalue streams with the runtime's rules (zig-zag value
+  deltas, quantum-scaled pc deltas, zero-value-delta terminator, pc-bound
+  completion) under checked arithmetic. Truncated/overflowing varints,
+  out-of-range offsets, arithmetic overflow, an exhausted scan budget
+  (`SCAN_BUDGET`), and exhaustion without proven termination are errors,
+  never a best-effort maximum.
+- Per-tree decoding is bounded by `MAX_INLINE_ENTRIES`; exceeding the cap is
+  reported as `EntryLimit` instead of silently truncating. A record whose
+  `parent_pc` falls outside the host function is `InvalidParentPc`; the
+  validated prefix is retained and the tainted record is never returned.
+- `decode_inline_tree` remains as a wrapper and returns `Ok` only for
+  complete results, so the legacy API no longer reports truncated or
+  unlocatable trees as clean empty successes.
+
+This is not a general parser-hardening or crash-proof-parsing claim, and it
+is not a version-wide support claim: the 16-byte `runtime.inlinedCall`
+layout is decoded only for the go1.20+ table magic, and the application
+additionally gates on the recorded Go version family.
 
 ## Separately authorized mechanical hygiene
 
@@ -68,7 +109,10 @@ ignored root `target/vendor-unstrip/`. The full application gate is `just check`
 Remove this local patch only when an upstream release provides equivalent checked
 bounds, version-preserving recovery status and detected-record-error reporting,
 and both dependency tests and application regressions pass against that release
+without weakening their assertions. Remove the strict-inline-v1 portion only
+when an upstream release provides equivalent checked inline outcomes — typed
+issues, count-establishing pcdata scans, retained prefixes and observable caps
+— and both the vendor inline tests and the application inline regressions pass
 without weakening their assertions. Revisit provenance and the producer patch
 label as part of that change; do not silently substitute version-only legacy
-parse for the checked API. Future inline work must carry its own explicit patch
-identity and tests; it is not part of `strict-buildinfo-v1`.
+parse for the checked API.

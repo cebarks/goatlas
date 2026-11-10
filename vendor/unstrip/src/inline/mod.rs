@@ -56,6 +56,40 @@ pub struct InlinedCall {
     pub start_line: i32,
 }
 
+/// Typed reason an inline-tree decode could not be established as complete.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InlineIssueKind {
+    TruncatedFunction,
+    InvalidPcData,
+    EntryLimit,
+    AddressOverflow,
+    TruncatedTree,
+    InvalidParentPc,
+    UnsupportedLayout,
+    MissingGofunc,
+}
+
+/// One observed decoder problem, with a human-readable explanation.
+#[derive(Debug, Clone)]
+pub struct InlineDecodeIssue {
+    pub kind: InlineIssueKind,
+    pub message: String,
+}
+
+/// Checked decode result for one function's inline tree.
+///
+/// `complete` requires a known expected entry count, exactly that many
+/// validated entries and no suppressed errors. A genuine empty tree is
+/// `complete` with `expected_entries == Some(0)`; a truncated or unknown
+/// tree is never complete.
+#[derive(Debug, Clone)]
+pub struct InlineTreeDecode {
+    pub entries: Vec<InlinedCall>,
+    pub expected_entries: Option<usize>,
+    pub complete: bool,
+    pub issues: Vec<InlineDecodeIssue>,
+}
+
 /// Number of funcdata pointer slots required before `FUNCDATA_InlTree`
 /// is addressable in a function's funcdata array.
 const FUNCDATA_INLTREE: usize = 3;
@@ -66,26 +100,90 @@ const PCDATA_INLTREE_INDEX: usize = 2;
 /// Hard cap on entries per function. A real inline tree fits in a handful
 /// of KB; 65_536 entries (1 MiB) is a very generous structural ceiling
 /// and protects against a garbage length being inferred from a corrupt
-/// next-pointer.
+/// next-pointer. Exceeding it is reported as [`InlineIssueKind::EntryLimit`]
+/// instead of silently truncating the walk.
 const MAX_INLINE_ENTRIES: usize = 65_536;
+
+/// Guard against a non-terminating pcvalue stream. Exhausting the budget
+/// is an explicit decode issue, never a silent best-effort maximum.
+const SCAN_BUDGET: usize = 1_000_000;
 
 /// Decode the `FUNCDATA_InlTree` array for a single function.
 ///
-/// Returns `Ok(vec![])` when the function has no inline tree (either
-/// because it has fewer than 4 funcdata entries, or because slot 3 is
-/// the sentinel `u32::MAX`). Returns an error if the gofunc base is
-/// missing (call [`Pclntab::with_gofunc`] first), if the encoded
-/// structure straddles unmapped memory, or (most importantly) if any
-/// decoded entry's `parent_pc` falls outside the host function's PC
-/// range. The last check rejects corrupted or recycled funcdata.
+/// Decode the `FUNCDATA_InlTree` array for a single function.
+///
+/// Compatibility wrapper over [`decode_inline_tree_checked`]: it returns
+/// `Ok(entries)` only for complete results (including a genuine empty
+/// tree) and an error for any incomplete outcome, so a truncated or
+/// unlocatable tree is never reported as a clean empty success.
 pub fn decode_inline_tree(
     bin: &GoBinary,
     pcln: &Pclntab,
     func: &FuncEntry,
 ) -> Result<Vec<InlinedCall>> {
+    let decoded = decode_inline_tree_checked(bin, pcln, func);
+    if decoded.complete {
+        return Ok(decoded.entries);
+    }
+    let detail = decoded
+        .issues
+        .first()
+        .map(|issue| issue.message.clone())
+        .unwrap_or_else(|| "no decoder issue recorded".to_string());
+    Err(Error::ModuleData(format!(
+        "inline tree for {} could not be decoded completely: {detail}",
+        func.name
+    )))
+}
+
+/// Decode the `FUNCDATA_InlTree` array for a single function with explicit
+/// checked outcomes. See [`InlineTreeDecode`] for the completeness contract;
+/// the legacy [`decode_inline_tree`] wraps this and only returns `Ok` for
+/// complete results.
+///
+/// The decode is a chain of checked prerequisites, each of which either
+/// establishes part of the outcome or fails with a typed issue:
+///
+/// 1. Only the go1.20+ table layout (`magic 0xfffffff1`) is decodable; any
+///    other layout is [`InlineIssueKind::UnsupportedLayout`].
+/// 2. The 44-byte `_func` header must be fully readable, or the result is
+///    [`InlineIssueKind::TruncatedFunction`] with no expected count.
+/// 3. The expected entry count is derived only from a completed
+///    PCDATA_InlTreeIndex scan; a malformed stream is
+///    [`InlineIssueKind::InvalidPcData`] and leaves the count unknown.
+/// 4. The tree location comes from the `FUNCDATA_InlTree` slot; a short
+///    slot read is `TruncatedFunction` but retains the count established
+///    in step 3. An absent stream/slot (offset 0 or the `u32::MAX`
+///    sentinel) is a genuine empty tree when the index scan agrees.
+/// 5. A tree the index scan counted but the funcdata cannot address (or
+///    the reverse contradiction) is `UnsupportedLayout`, never a decoded
+///    zero.
+/// 6. A present tree requires a nonzero gofunc base ([
+///    `InlineIssueKind::MissingGofunc`]) and checked address arithmetic
+///    ([`InlineIssueKind::AddressOverflow`]).
+/// 7. Entries are decoded up to the expected count, bounded by
+///    [`MAX_INLINE_ENTRIES`] ([`InlineIssueKind::EntryLimit`] makes the cap
+///    observable). An unreadable record is
+///    [`InlineIssueKind::TruncatedTree`]; an invalid `parent_pc` is
+///    [`InlineIssueKind::InvalidParentPc`]. In both cases the validated
+///    prefix is retained and the bad record is never returned.
+pub fn decode_inline_tree_checked(
+    bin: &GoBinary,
+    pcln: &Pclntab,
+    func: &FuncEntry,
+) -> InlineTreeDecode {
+    if pcln.magic() != crate::pclntab::MAGIC_1_20 {
+        return incomplete(
+            InlineIssueKind::UnsupportedLayout,
+            format!(
+                "pclntab magic 0x{:08x} does not carry the go1.20+ inline layout",
+                pcln.magic()
+            ),
+            None,
+        );
+    }
     let data = pcln.data();
     let le = pcln.little_endian();
-    let func_start = pcln.funcdata_off() + func.func_off;
 
     // Layout of `_func` (Go 1.20+, 40-byte fixed header + packed tail):
     //   off=0  entryOff       u32
@@ -104,106 +202,244 @@ pub fn decode_inline_tree(
     //   off=43 nfuncdata      u8
     //   off=44 [npcdata]u32   pcdata table
     //   off=44+npcdata*4 [nfuncdata]u32 funcdata table
-    if func_start + 44 > data.len() {
-        return Ok(vec![]);
-    }
-    let npcdata = read_u32(data, func_start + 28, le)? as usize;
-    let nfuncdata = data[func_start + 43] as usize;
-    if nfuncdata <= FUNCDATA_INLTREE || npcdata <= PCDATA_INLTREE_INDEX {
-        return Ok(vec![]);
-    }
-
-    // Resolve the array length first by scanning the PCDATA_InlTreeIndex
-    // pcvalue stream for its maximum index across the function's PC range.
-    // The inline-tree subarray for this function holds (max_idx + 1) entries;
-    // walking past that point reads adjacent functions' subarrays and the
-    // parent_pc bounds-check rejects it. That is the safe termination point.
-    let pcdata_off = func_start + 44;
-    let pcdata_inltree_off = read_u32(data, pcdata_off + PCDATA_INLTREE_INDEX * 4, le)? as usize;
-    let max_idx = max_pcvalue(
-        pcln_pctab(pcln),
-        pcdata_inltree_off,
-        u32::try_from(func.size).unwrap_or(u32::MAX),
-    );
-    if max_idx < 0 {
-        // No inline indices ever recorded for this function: empty tree.
-        return Ok(vec![]);
-    }
-    let n_entries = (max_idx as usize).saturating_add(1).min(MAX_INLINE_ENTRIES);
-
-    let funcdata_arr_off = func_start + 44 + npcdata * 4;
-    let inltree_slot_off = funcdata_arr_off + FUNCDATA_INLTREE * 4;
-    if inltree_slot_off + 4 > data.len() {
-        return Ok(vec![]);
-    }
-    let inltree_funcdata = read_u32(data, inltree_slot_off, le)?;
-    if inltree_funcdata == u32::MAX {
-        return Ok(vec![]);
-    }
-
-    let Some(gofunc) = pcln.gofunc() else {
-        return Err(Error::ModuleData(
-            "inline-tree decoding requires gofunc base; \
-             call Pclntab::with_gofunc(moduledata.gofunc) first"
-                .to_string(),
-        ));
+    let Some(func_begin) = pcln
+        .funcdata_off()
+        .checked_add(func.func_off)
+        .filter(|begin| begin.checked_add(44).is_some_and(|end| end <= data.len()))
+    else {
+        return incomplete(
+            InlineIssueKind::TruncatedFunction,
+            format!(
+                "_func header for {} at table offset {:#x} is not fully readable",
+                func.name, func.func_off
+            ),
+            None,
+        );
     };
-    let inltree_addr = gofunc.wrapping_add(inltree_funcdata as u64);
+    let npcdata = read_u32(data, func_begin + 28, le).unwrap_or(0);
+    let nfuncdata = data[func_begin + 43] as usize;
+    let pcdata_addressable = npcdata as usize > PCDATA_INLTREE_INDEX;
+    let funcdata_addressable = nfuncdata > FUNCDATA_INLTREE;
 
-    // The array is not length-prefixed. The runtime indexes into it using
-    // the PCDATA_InlTreeIndex stream, so the structural length is "as many
-    // valid 16-byte records as the gofunc region holds". We bound by:
-    //   (a) MAX_INLINE_ENTRIES, the absolute ceiling
-    //   (b) the section containing inltree_addr (read_at_addr enforces this)
-    //
-    // We read entries until the next 16-byte slice fails to map, at which
-    // point we stop. Production v1.1 will tighten this using the
-    // pcdata-derived high-watermark; for the probe this conservative walk
-    // is what we want; it surfaces stray padding bytes rather than
-    // silently truncating real entries.
-    let mut out = Vec::with_capacity(n_entries);
-    for i in 0..n_entries {
-        let entry_addr = inltree_addr.wrapping_add((i as u64) * 16);
-        let Some(bytes) = bin.read_at_addr(entry_addr, 16) else {
-            break;
-        };
-        let func_id = bytes[0];
-        let name_off = i32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        let parent_pc = i32::from_le_bytes(bytes[8..12].try_into().unwrap());
-        let start_line = i32::from_le_bytes(bytes[12..16].try_into().unwrap());
-
-        let entry = InlinedCall {
-            func_id,
-            name_off,
-            parent_pc,
-            start_line,
-        };
-
-        // Safety: parent_pc must point inside
-        // the host function. parent_pc == -1 is the runtime's marker for
-        // "top-level inline" (no parent call site), so we allow it; any
-        // other negative value or an offset past func.size is corruption
-        // (mis-resolved funcdata, recycled blob, etc.) and we refuse to
-        // return tainted entries.
-        if entry.parent_pc != -1 {
-            if entry.parent_pc < 0 {
-                return Err(Error::ModuleData(format!(
-                    "inline tree for {} has negative parent_pc {} at index {}",
-                    func.name, entry.parent_pc, i,
-                )));
+    // Resolve the expected entry count first by scanning the
+    // PCDATA_InlTreeIndex pcvalue stream for its maximum index across the
+    // function's PC range. The inline-tree subarray for this function
+    // holds (max_idx + 1) entries. Only a completed scan establishes a
+    // count; anything else leaves it unknown.
+    let expected: Option<usize> = if pcdata_addressable {
+        let pcdata_off = func_begin + 44;
+        let pcdata_inltree_off = match read_u32(data, pcdata_off + PCDATA_INLTREE_INDEX * 4, le) {
+            Ok(offset) => offset,
+            Err(_) => {
+                return incomplete(
+                    InlineIssueKind::TruncatedFunction,
+                    format!(
+                        "pcdata table for {} is truncated before the inline index slot",
+                        func.name
+                    ),
+                    None,
+                );
             }
-            let pc = entry.parent_pc as u64;
-            if pc >= func.size {
-                return Err(Error::ModuleData(format!(
-                    "inline tree for {} has parent_pc 0x{:x} >= func.size 0x{:x} at index {}",
-                    func.name, pc, func.size, i,
-                )));
+        };
+        if pcdata_inltree_off == 0 {
+            // No inline-index stream: the runtime never attributes an
+            // inlined frame to any PC of this function.
+            Some(0)
+        } else {
+            match max_pcvalue(
+                pcln_pctab(pcln),
+                pcdata_inltree_off as usize,
+                func.size,
+                pcln.quantum(),
+            ) {
+                Ok(max_idx) if max_idx < 0 => Some(0),
+                Ok(max_idx) => Some(max_idx as usize + 1),
+                Err(issue) => {
+                    return InlineTreeDecode {
+                        entries: vec![],
+                        expected_entries: None,
+                        complete: false,
+                        issues: vec![issue],
+                    };
+                }
             }
         }
+    } else {
+        None
+    };
 
-        out.push(entry);
+    // Locate the tree through the FUNCDATA_InlTree slot. A short slot read
+    // is a truncated function, but the count established above is retained.
+    let slot: Option<u32> = if funcdata_addressable {
+        let funcdata_arr_off = (npcdata as usize)
+            .checked_mul(4)
+            .and_then(|scaled| func_begin.checked_add(44)?.checked_add(scaled))
+            .filter(|off| {
+                off.checked_add(FUNCDATA_INLTREE * 4 + 4)
+                    .is_some_and(|end| end <= data.len())
+            });
+        match funcdata_arr_off.and_then(|off| read_u32(data, off + FUNCDATA_INLTREE * 4, le).ok()) {
+            Some(slot) => Some(slot),
+            None => {
+                return incomplete(
+                    InlineIssueKind::TruncatedFunction,
+                    format!(
+                        "funcdata table for {} is truncated before the inline tree slot",
+                        func.name
+                    ),
+                    expected,
+                );
+            }
+        }
+    } else {
+        None
+    };
+
+    // An absent stream/slot combination is how the runtime encodes "no
+    // inline tree"; it is a genuine zero only when nothing contradicts it.
+    let tree_absent = slot.is_none_or(|slot| slot == u32::MAX);
+    if tree_absent {
+        return match expected {
+            Some(count) if count > 0 => incomplete(
+                InlineIssueKind::UnsupportedLayout,
+                format!(
+                    "pcdata counted {count} inline entries for {} but no inline \
+                     tree is addressable",
+                    func.name
+                ),
+                expected,
+            ),
+            _ => InlineTreeDecode {
+                entries: vec![],
+                expected_entries: Some(0),
+                complete: true,
+                issues: vec![],
+            },
+        };
     }
-    Ok(out)
+    let slot = slot.unwrap_or_default();
+
+    let Some(expected) = expected else {
+        return incomplete(
+            InlineIssueKind::UnsupportedLayout,
+            format!(
+                "inline tree for {} is present but no index stream establishes \
+                 its length",
+                func.name
+            ),
+            None,
+        );
+    };
+    if expected == 0 {
+        // The index scan proved no PC of this function is attributed to an
+        // inlined frame, so the tree carries no records.
+        return InlineTreeDecode {
+            entries: vec![],
+            expected_entries: Some(0),
+            complete: true,
+            issues: vec![],
+        };
+    }
+
+    let Some(gofunc) = pcln.gofunc().filter(|base| *base != 0) else {
+        return incomplete(
+            InlineIssueKind::MissingGofunc,
+            format!(
+                "inline tree for {} requires a nonzero gofunc base; \
+                 call Pclntab::with_gofunc(moduledata.gofunc) first",
+                func.name
+            ),
+            Some(expected),
+        );
+    };
+    let Some(inltree_addr) = gofunc.checked_add(slot as u64) else {
+        return incomplete(
+            InlineIssueKind::AddressOverflow,
+            format!(
+                "gofunc 0x{gofunc:x} + inline tree offset 0x{slot:x} overflows \
+                 the address space"
+            ),
+            Some(expected),
+        );
+    };
+
+    // Decode the bounded, validated prefix. A read that fails to map or a
+    // record whose parent_pc falls outside the host function stops the
+    // walk; the validated prefix is retained and the bad record is never
+    // returned. The absolute entry cap stays observable as an issue.
+    let mut issues = Vec::new();
+    let decode_limit = expected.min(MAX_INLINE_ENTRIES);
+    let mut entries = Vec::with_capacity(decode_limit);
+    for i in 0..decode_limit {
+        let Some(entry_addr) = inltree_addr.checked_add((i as u64) * 16) else {
+            issues.push(InlineDecodeIssue {
+                kind: InlineIssueKind::AddressOverflow,
+                message: format!(
+                    "inline tree address for {} overflows at entry {i}",
+                    func.name
+                ),
+            });
+            break;
+        };
+        let Some(bytes) = bin.read_at_addr(entry_addr, 16) else {
+            issues.push(InlineDecodeIssue {
+                kind: InlineIssueKind::TruncatedTree,
+                message: format!(
+                    "inline tree for {} is not fully mapped at entry {i}",
+                    func.name
+                ),
+            });
+            break;
+        };
+        let call = InlinedCall {
+            func_id: bytes[0],
+            name_off: i32::from_le_bytes(bytes[4..8].try_into().unwrap()),
+            parent_pc: i32::from_le_bytes(bytes[8..12].try_into().unwrap()),
+            start_line: i32::from_le_bytes(bytes[12..16].try_into().unwrap()),
+        };
+        // parent_pc == -1 is the runtime's marker for a top-level inline
+        // (no parent call site); any other negative value or an offset past
+        // func.size is corruption (mis-resolved funcdata, recycled blob)
+        // and taints the record.
+        if call.parent_pc != -1 && (call.parent_pc < 0 || call.parent_pc as u64 >= func.size) {
+            issues.push(InlineDecodeIssue {
+                kind: InlineIssueKind::InvalidParentPc,
+                message: format!(
+                    "inline tree for {} has parent_pc {} outside [0, 0x{:x}) at \
+                     index {i}",
+                    func.name, call.parent_pc, func.size
+                ),
+            });
+            break;
+        }
+        entries.push(call);
+    }
+    if expected > MAX_INLINE_ENTRIES {
+        issues.push(InlineDecodeIssue {
+            kind: InlineIssueKind::EntryLimit,
+            message: format!(
+                "inline tree for {} claims {expected} entries; decoding is capped \
+                 at {MAX_INLINE_ENTRIES}",
+                func.name
+            ),
+        });
+    }
+    let complete = issues.is_empty() && entries.len() == expected;
+    InlineTreeDecode {
+        entries,
+        expected_entries: Some(expected),
+        complete,
+        issues,
+    }
+}
+
+fn incomplete(kind: InlineIssueKind, message: String, expected: Option<usize>) -> InlineTreeDecode {
+    InlineTreeDecode {
+        entries: vec![],
+        expected_entries: expected,
+        complete: false,
+        issues: vec![InlineDecodeIssue { kind, message }],
+    }
 }
 
 /// Resolve a leaf entry's `name_off` to a function name. Returns `None`
@@ -242,45 +478,96 @@ fn pcln_pctab<'a>(pcln: &'a Pclntab<'_>) -> &'a [u8] {
 }
 
 /// Walk a pc-value stream and return the maximum `value` it ever produces
-/// while `pc < pc_limit`. Returns -1 if the stream is empty/unparseable
-/// (meaning: no inline-tree index ever recorded for this function).
-fn max_pcvalue(table: &[u8], start: usize, pc_limit: u32) -> i64 {
+/// while `pc < pc_limit`, using the runtime's rules: value deltas are
+/// zig-zag varints, pc deltas are varints scaled by `quantum`, a zero
+/// value-delta after the first record terminates the stream, and reaching
+/// `pc_limit` completes it. `Ok(-1)` means the stream never records a
+/// value. `Err` means the stream is malformed — truncated or overflowing
+/// varints, an out-of-range start offset, arithmetic overflow, an exhausted
+/// scan budget, or exhaustion without a proven terminator — and those are
+/// never silently folded into a maximum.
+fn max_pcvalue(
+    table: &[u8],
+    start: usize,
+    pc_limit: u64,
+    quantum: u8,
+) -> std::result::Result<i64, InlineDecodeIssue> {
+    let invalid = |message: String| {
+        Err(InlineDecodeIssue {
+            kind: InlineIssueKind::InvalidPcData,
+            message,
+        })
+    };
     if start >= table.len() {
-        return -1;
+        return invalid(format!(
+            "pcdata offset {start} is out of range for the {len}-byte pctab",
+            len = table.len()
+        ));
     }
+    let overflow = |message: String| {
+        Err(InlineDecodeIssue {
+            kind: InlineIssueKind::AddressOverflow,
+            message,
+        })
+    };
     let mut value: i64 = -1;
-    let mut pc: u32 = 0;
+    let mut pc: u64 = 0;
     let mut pos = start;
     let mut max_seen: i64 = -1;
     let mut iter_guard = 0;
-    while pos < table.len() && iter_guard < 1_000_000 {
+    while pos < table.len() {
         iter_guard += 1;
+        if iter_guard > SCAN_BUDGET {
+            return invalid(format!(
+                "pcdata scan exceeded {SCAN_BUDGET} records without terminating"
+            ));
+        }
         let (uval, n) = match read_varint(&table[pos..]) {
             Some(v) => v,
-            None => return max_seen,
+            None => {
+                return invalid(format!("truncated pcdata value varint at byte {pos}"));
+            }
         };
         // A zero value-delta after the first record terminates the stream
         // (Go runtime convention; the leading record is always non-zero).
         if uval == 0 && pc != 0 {
-            return max_seen;
+            return Ok(max_seen);
         }
         pos += n;
         let delta = zig_zag(uval);
-        value = value.wrapping_add(delta);
+        value = match value.checked_add(delta) {
+            Some(v) => v,
+            None => {
+                return overflow(format!("pcdata value accumulator overflows at byte {pos}"));
+            }
+        };
         let (pc_delta, n2) = match read_varint(&table[pos..]) {
             Some(v) => v,
-            None => return max_seen,
+            None => {
+                return invalid(format!("truncated pcdata pc varint at byte {pos}"));
+            }
         };
         pos += n2;
-        pc = pc.wrapping_add(pc_delta as u32);
+        let step = match (pc_delta).checked_mul(u64::from(quantum)) {
+            Some(v) => v,
+            None => {
+                return overflow(format!("pcdata pc delta overflows at byte {pos}"));
+            }
+        };
+        pc = match pc.checked_add(step) {
+            Some(v) => v,
+            None => {
+                return overflow(format!("pcdata pc accumulator overflows at byte {pos}"));
+            }
+        };
         if value > max_seen {
             max_seen = value;
         }
         if pc >= pc_limit {
-            return max_seen;
+            return Ok(max_seen);
         }
     }
-    max_seen
+    invalid("pcdata stream exhausted without a terminator or pc bound".to_string())
 }
 
 fn zig_zag(u: u64) -> i64 {
@@ -568,4 +855,80 @@ fn read_u32(buf: &[u8], off: usize, little_endian: bool) -> Result<u32> {
     } else {
         u32::from_be_bytes(s.try_into().unwrap())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Encode a value the way the pcvalue streams do (LE 7-bit varint).
+    fn varint(mut value: u64) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let byte = (value & 0x7f) as u8;
+            value >>= 7;
+            if value == 0 {
+                out.push(byte);
+                return out;
+            }
+            out.push(byte | 0x80);
+        }
+    }
+
+    #[test]
+    fn checked_pcdata_errors_are_not_a_prefix_maximum() {
+        // Truncated varint in the value half.
+        assert!(max_pcvalue(&[0x80], 0, 100, 1).is_err());
+        // Truncated varint in the pc half.
+        assert!(max_pcvalue(&[0x02, 0x80], 0, 100, 1).is_err());
+        // Out-of-range start offsets.
+        assert!(max_pcvalue(&[0x02, 0x01, 0x00], 3, 1, 1).is_err());
+        assert!(max_pcvalue(&[], 0, 1, 1).is_err());
+        // Exhaustion without proven termination: the stream simply ends
+        // before a terminator or the PC bound.
+        assert!(max_pcvalue(&[0x02, 0x01], 0, 100, 1).is_err());
+        // Arithmetic overflow of the accumulated pc: a second record whose
+        // pc delta is the largest 10-byte varint cannot be added.
+        let overflow_pc = [
+            &[0x02u8, 0x01][..],
+            &[0x02][..],
+            &[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f][..],
+        ]
+        .concat();
+        assert!(max_pcvalue(&overflow_pc, 0, u64::MAX, 1).is_err());
+        // Arithmetic overflow of the accumulated value: two maximal positive
+        // zig-zag deltas exceed i64.
+        let overflow_value = [
+            &varint(u64::MAX - 1)[..],
+            &[0x01][..],
+            &varint(u64::MAX - 1)[..],
+            &[0x01][..],
+        ]
+        .concat();
+        assert!(max_pcvalue(&overflow_value, 0, u64::MAX, 1).is_err());
+        // Exhausted scan budget: two mebibytes of zero records neither
+        // terminate nor reach the pc bound.
+        let zeros = vec![0u8; 2 * 1024 * 1024];
+        assert!(max_pcvalue(&zeros, 0, 1_000, 1).is_err());
+    }
+
+    #[test]
+    fn checked_valid_zero_and_bounded_streams_complete() {
+        // First value delta reaches index 0 and the PC bound completes the
+        // scan (brief example).
+        assert_eq!(max_pcvalue(&[2, 1, 0], 0, 1, 1).unwrap(), 0);
+        // Normal terminator: a zero value-delta after a recorded PC.
+        assert_eq!(max_pcvalue(&[2, 1, 0, 5, 1], 0, 100, 1).unwrap(), 0);
+        // PC-bound completion; trailing bytes are never read.
+        assert_eq!(max_pcvalue(&[2, 5], 0, 4, 1).unwrap(), 0);
+        // Quantum scaling: pc deltas count in quantum units.
+        assert_eq!(max_pcvalue(&[2, 1, 0], 0, 2, 2).unwrap(), 0);
+        assert_eq!(max_pcvalue(&[2, 2, 3, 1, 0], 0, 8, 2).unwrap(), 0);
+        // A leading zero value-delta is a legal first record, not a
+        // terminator; this is the two-record control's real stream.
+        assert_eq!(
+            max_pcvalue(&[0, 4, 2, 4, 2, 4, 3, 9, 0], 0, 64, 1).unwrap(),
+            1
+        );
+    }
 }

@@ -7,11 +7,11 @@ use std::process::Command;
 #[test]
 fn module_report_preserves_identity_as_coverage_advances() {
     let (out, j) = run_json(&fixture("app.stripped"));
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(0));
     assert_eq!(j["schema_version"], 1);
     assert_eq!(j["coverage"]["build_info"]["state"], "decoded");
     assert_eq!(j["coverage"]["functions"]["state"], "decoded");
-    assert_eq!(j["coverage"]["inlining"]["state"], "unavailable");
+    assert_eq!(j["coverage"]["inlining"]["state"], "decoded");
     assert_eq!(
         j["build"]["dependencies"][0]["path"],
         "example.com/golang-symbol/fixturedep"
@@ -24,7 +24,10 @@ fn module_report_preserves_identity_as_coverage_advances() {
 fn extractor_patch_identity_is_explicit() {
     let (_, j) = run_json(&fixture("app.stripped"));
     assert_eq!(j["producer"]["extractor_version"], "1.2.0");
-    assert_eq!(j["producer"]["extractor_patch"], "strict-buildinfo-v1");
+    assert_eq!(
+        j["producer"]["extractor_patch"],
+        "strict-buildinfo-v1+strict-inline-v1"
+    );
     assert_eq!(j["coverage"]["build_info"]["expected"], 1);
     assert_eq!(j["coverage"]["build_info"]["visited"], 1);
     assert_eq!(j["coverage"]["build_info"]["expected_observations"], 1);

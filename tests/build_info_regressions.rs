@@ -127,7 +127,7 @@ fn earlier_non_header_magic_does_not_mask_later_build_info() {
     let path = temp.path().join("earlier non-header literal");
     std::fs::write(&path, &bytes).unwrap();
     let (out, mut observed) = run_json(&path);
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(0));
     assert!(out.stderr.is_empty());
     assert_eq!(observed["coverage"]["build_info"]["state"], "decoded");
     assert_ne!(

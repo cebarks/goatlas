@@ -1,11 +1,12 @@
 # golang-symbol
 
 Offline inventory of recorded Go build identity and retained standalone function
-evidence in a local executable. The initial validated profile is ordinary
-gc-compiled Linux ELF x86-64, including binaries
+and inline-call evidence in a local executable. The initial validated profile is
+ordinary gc-compiled Linux ELF x86-64, including binaries
 stripped with `-s -w` and PIE builds. This slice reports modules, replacements,
-build settings and retained standalone implementations (including
-reflection-only methods); inline occurrence recovery is **not attempted** yet.
+build settings, retained standalone implementations (including
+reflection-only methods) and inline occurrences recovered from
+`FUNCDATA_InlTree` metadata.
 
 ## Use
 
@@ -22,10 +23,9 @@ to stderr.
 
 Exit codes:
 
-- **0**: all three core metadata walks decoded (not currently produced by this slice).
-- **2**: valid report with partial or unavailable coverage. A successful scan of
-  an ordinary Go binary currently returns 2 because inline recovery is
-  unavailable.
+- **0**: all three core metadata walks decoded (build identity, standalone
+  functions, inline occurrences).
+- **2**: valid report with partial or unavailable coverage.
 - **1**: no valid report, such as an unreadable, non-regular or oversized input,
   incorrect invocation, or output failure.
 
@@ -49,8 +49,10 @@ and `vcs.time` remain unchanged. The scanning host's input path and analysis tim
 are not added. Reports may contain sensitive embedded provenance.
 
 The parser is pinned to `unstrip =1.2.0` with the local `strict-buildinfo-v1`
-checked build-info patch. Its upstream checksum, revision, licenses, exact patch
-scope and replacement criteria are documented in [vendor/unstrip/PATCHES.md](vendor/unstrip/PATCHES.md).
+and `strict-inline-v1` checked patches (combined producer identity
+`strict-buildinfo-v1+strict-inline-v1`). Their upstream checksum, revision,
+licenses, exact patch scope and replacement criteria are documented in
+[vendor/unstrip/PATCHES.md](vendor/unstrip/PATCHES.md).
 Unsupported targets and unrecovered metadata yield unavailable coverage with
 issues, not a clean empty inventory. When a raw Go version survives but module
 metadata is missing or malformed, build-info coverage is partial: the raw version
@@ -80,10 +82,31 @@ shortened "decoded" walk.
 Decoded coverage describes traversal of recorded metadata, not source-version
 proof, runtime reachability, vulnerability affectedness, or proven absence.
 A replacement is separate evidence, not a substitution of the original release.
-This tool makes no binary-wide completeness claim. Inline observations are not
-yet emitted; standalone function evidence is independent of optional build
-identity and module attribution. Representative Red Hat artifact acceptance is
-pending.
+This tool makes no binary-wide completeness claim. Standalone function evidence
+is independent of optional build identity and module attribution.
+Representative Red Hat artifact acceptance is pending.
+
+Inline evidence comes from the per-function `FUNCDATA_InlTree` arrays addressed
+through the moduledata `gofunc` base. Decoding is gated to the go1.20+ table
+magic and the documented 16-byte `runtime.inlinedCall` release families
+1.20-1.26 plus source-inspected 1.27 (witnessed on go1.27.3 fixtures); other
+magics, development/unknown versions and future releases stay unavailable
+rather than guessed. Each tree's expected entry count is derived from a
+completed `PCDATA_InlTreeIndex` scan, and decoding preserves validated
+prefixes, per-record indexes, raw parent-PCs and positive start lines while
+mapping every decoder failure to a stable `inline_`-prefixed issue with the
+containing function as context. A genuine empty tree is complete with zero
+expected entries; a truncated, contradictory or unlocatable tree is never
+reported as a clean empty success, and unresolved callee names are indexed
+occurrences plus a core `unresolved_inline_name` gap. Repeated records inside
+one containing function are distinct evidence rows and never collapse. The
+gofunc base is located by a minimal version-gated reader in the application
+because the vendored moduledata locator predates the go1.27 field moves; that
+reader shares the locator's replacement fate when upstream handles go1.27.
+Inline coverage counts expected functions / fully checked trees and inline
+records; expected observation totals stay null when any function's tree total
+cannot be established, and a partial function walk keeps the inline walk
+partial because uninspected functions' trees were never examined.
 
 Scanning is local and in-process: no target execution, Go invocation, helper
 processes, network lookups, downloads, or external symbol resolvers. Go is needed
@@ -97,7 +120,8 @@ prerequisite, never a skipped test. No external Go modules are needed:
 ```sh
 just fixtures-base  # builds unstripped/stripped Linux amd64 fixtures; never runs them
 just fixtures-pie   # builds the stripped PIE fixture variant
-just fixtures       # fixtures-base + fixtures-pie
+just fixtures-noinline  # builds the stripped fixture with package inlining disabled
+just fixtures       # fixtures-base + fixtures-pie + fixtures-noinline
 just test           # fixtures, cargo test --locked
 just patch-check    # full vendor formatting, locked library tests, strict library Clippy
 just check          # test, patch-check, application formatting and strict Clippy

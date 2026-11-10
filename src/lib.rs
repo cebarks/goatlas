@@ -1,5 +1,6 @@
 mod build_info;
 mod functions;
+mod inlines;
 pub mod report;
 
 use report::*;
@@ -52,7 +53,7 @@ pub fn scan_bytes(bytes: Vec<u8>) -> Result<Inventory, ScanError> {
         producer: Producer {
             tool_version: env!("CARGO_PKG_VERSION").into(),
             extractor_version: "1.2.0".into(),
-            extractor_patch: Some("strict-buildinfo-v1".into()),
+            extractor_patch: Some("strict-buildinfo-v1+strict-inline-v1".into()),
         },
         artifact: Artifact {
             sha256: Sha256::digest(&bytes)
@@ -75,7 +76,7 @@ pub fn scan_bytes(bytes: Vec<u8>) -> Result<Inventory, ScanError> {
             ),
             inlining: unavailable(
                 "not_attempted",
-                "Inline recovery is not implemented in this slice",
+                "Inline recovery was not reached for this input",
             ),
         },
     };
@@ -120,20 +121,33 @@ fn recover_evidence(bytes: Vec<u8>, report: &mut Inventory) {
     match unstrip::Pclntab::parse(&bin) {
         Ok(pcln) => {
             let mut attribution = functions::Attribution::new(report.build.as_ref());
-            let walk = functions::collect_functions(&bin, &pcln, &mut attribution);
-            debug_assert_eq!(
-                walk.entries.len(),
-                walk.observations.len(),
-                "body-validated entries parallel the reported observations"
-            );
-            report.functions = walk.observations;
-            report.coverage.functions = walk.coverage;
+            let func_walk = functions::collect_functions(&bin, &pcln, &mut attribution);
+            // Inline prerequisites: locate the gofunc base once, validate it
+            // and set it on the same table both walks share. A locator
+            // failure makes only the inline component unavailable.
+            let go_version = report.artifact.go_version.clone();
+            let inline_coverage = match inlines::locate_gofunc(&bin, go_version.as_deref()) {
+                Ok(gofunc) => {
+                    let inline_walk = inlines::collect_inlines(
+                        &bin,
+                        pcln.with_gofunc(gofunc),
+                        &func_walk,
+                        &mut attribution,
+                        go_version.as_deref(),
+                    );
+                    report.inline_occurrences = inline_walk.observations;
+                    inline_walk.coverage
+                }
+                Err(problem) => unavailable(&problem.code, problem.message),
+            };
+            report.functions = func_walk.observations;
+            report.coverage.functions = func_walk.coverage;
+            report.coverage.inlining = inline_coverage;
         }
         Err(error) => {
-            report.coverage.functions = unavailable(
-                "pclntab_unavailable",
-                format!("runtime function table could not be parsed: {error}"),
-            );
+            let message = format!("runtime function table could not be parsed: {error}");
+            report.coverage.functions = unavailable("pclntab_unavailable", message.clone());
+            report.coverage.inlining = unavailable("pclntab_unavailable", message);
         }
     }
 }

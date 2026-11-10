@@ -111,7 +111,7 @@ pub struct Coverage {
     pub issues: Vec<Issue>,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageState {
     Decoded,

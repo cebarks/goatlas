@@ -31,7 +31,7 @@ fn reflection_only_implementation_survives_stripping() {
         direct.file.as_deref(),
         Some("example.com/golang-symbol/fixture/main.go")
     );
-    assert_eq!(exit_code(&r), 2);
+    assert_eq!(exit_code(&r), 0);
     assert!(r.functions.iter().all(|f| f.size_bytes > 0));
     assert_eq!(
         r.coverage.functions.expected,
@@ -45,7 +45,7 @@ fn reflection_only_implementation_survives_stripping() {
     assert_eq!(r.coverage.functions.observations, r.functions.len() as u64);
     assert!(r.coverage.functions.issues.is_empty());
     let (out, j) = run_json(&fixture("app.stripped"));
-    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(out.status.code(), Some(0));
     assert_eq!(j["coverage"]["functions"]["state"], "decoded");
 }
 
