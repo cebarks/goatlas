@@ -2,11 +2,13 @@
 
 First real-artifact run of the golang-symbol CLI (schema v1, producer patch
 `strict-buildinfo-v1+strict-inline-v1`) against an owner-supplied Red Hat
-Enterprise Linux Go binary. This record is the acceptance evidence required by
-the implementation plan's Task 4. It documents coverage achieved, cross-checks,
-a demonstrated address-derivation defect in the vendored parser, and the
-resulting limitations. No CVE affectedness or source-patch conclusions are
-drawn anywhere in this record.
+Enterprise Linux Go binary, followed by an owner-authorized fix round that
+added the `strict-textstart-v1` vendored patch and recaptured the artifact.
+This record is the acceptance evidence required by the implementation plan's
+Task 4. It documents coverage achieved, cross-checks, the demonstrated
+address-derivation defect found in the vendored parser, its authorized fix,
+and the final fully decoded recapture. No CVE affectedness or source-patch
+conclusions are drawn anywhere in this record.
 
 ## Artifact
 
@@ -67,7 +69,8 @@ Independent cross-checks:
   address-level corroboration used `readelf`/`objdump` on the artifact plus a
   locally built, unstripped reproduction (below).
 
-Coverage achieved on the artifact:
+Coverage achieved on the artifact (initial run; superseded by the fix-round
+recapture below):
 
 - build identity: **decoded** (expected/visited/observations 1/1/1).
 - functions: **partial** — expected = visited = 71,934 rows, 71,932
@@ -77,10 +80,10 @@ Coverage achieved on the artifact:
   inline occurrences recovered through the word-40 gofunc path, expected
   observation total null via `function_walk_partial` propagation.
 
-## The two rejected spans: demonstrated vendored-parser defect
+## The two rejected spans: demonstrated vendored-parser defect (fixed in round 1)
 
-Both rejected entries are symptoms of one root cause, demonstrated and
-reproduced during this validation:
+The initial run (exit 2, saved as the pre-fix evidence) rejected both spans
+as `invalid_function_body`. Investigation traced them to one root cause:
 
 - In externally linked PIE builds, the pclntab header's `textStart` field is
   zero in the file (the runtime fills it by relocation at load time). The
@@ -112,28 +115,66 @@ reproduced during this validation:
   VAs in this report are shifted low by 0xfc0 for this artifact, which
   matters when correlating them with other tools' addresses.
 
-Per the task's execution rules the owning feature of this defect is the
+Per the task's execution rules the owning feature of this defect was the
 vendored `unstrip` pclntab (its published `textStart` fallback), so it was
-not patched here; the correction is escalated to the owner for a vendor-patch
-decision. No parser fork was introduced and the evidence contract was not
-weakened.
+escalated rather than patched in the first round; the owner then authorized
+the vendor patch, executed as fix round 1 below. No parser fork was
+introduced and the evidence contract was not weakened.
+
+## Fix round 1: strict-textstart-v1 recapture
+
+The owner authorized a third narrow vendor patch (pclntab only). When the
+modern-layout header's `textStart` is zero in the file, the vendored parser
+now resolves the base from the statically present `moduledata.text` (word
+22 from the pclntab-anchored candidate, with the runtime's region sanity and
+a section-mapping requirement); non-zero header values keep the previous
+behavior, and a missing or incredible candidate keeps the previous `.text`
+section fallback. `moduledata.text` was chosen over the RELA addend because
+it is the runtime's own base for functab entryOff arithmetic, is statically
+present, and was already validated end to end against `go tool nm` ground
+truth on the stock-toolchain external-PIE reproduction and the moduledata
+`minpc`/`etext` sanity on this artifact. Regression coverage: synthetic
+vendor unit tests for the zero-header resolution (resolve, keep-nonzero,
+no-candidate fallback, unmappable-candidate fallback) plus a permanent
+`app.extpie.stripped` fixture (`just fixtures-extpie`, CGO with
+`-linkmode=external -buildmode=pie`) whose CLI test pins decoded coverage
+and entry VAs against the moduledata base. Producer patch identity is now
+`strict-buildinfo-v1+strict-inline-v1+strict-textstart-v1`.
+
+Recapture of the same extracted bytes (SHA-256 re-verified unchanged;
+sentinel never created; scanner by absolute Cargo path with empty `PATH`):
+
+- exit code **0** — all three core walks **decoded**.
+- functions: expected = visited = observations = 71,934, zero issues. Both
+  previously rejected spans now validate at their true addresses:
+  `internal/abi.(*RegArgs).Dump` at `0xdb7fc0` (size 672) and
+  `internal/abi.(*StructField).Embedded` at `0xdb8c20` (size 32).
+- inlines: all 71,934 trees fully checked, 132,240 inline occurrences with
+  `observations == expected_observations` (one occurrence more than the
+  pre-fix run: the two newly inspected trees carry one inlined call).
+- VA spot-checks against ground truth: the first function entry equals
+  `moduledata.text` (`0xdb7fc0`, also the moduledata `minpc`); disassembly
+  at `0xdb7fc0` is Dump's real body (calls to `runtime.printlock`,
+  `runtime.printstring`, `runtime.printunlock`); `Embedded`'s 32-byte span
+  ends in `int3` alignment padding exactly at the function boundary; the
+  full shift arithmetic was independently verified on the stock-go1.27.3
+  external-PIE reproduction with `go tool nm` ground truth.
 
 ## Limitations
 
-- Partial recovery stays partial: this run does not satisfy full
-  first-artifact acceptance while the function walk is partial, and exit 2 is
-  the honest outcome. The partiality is fully explained by the vendored-parser
-  defect above.
-- Entry and container VAs in this report are shifted low by 0xfc0 (see
-  above) until the vendor decision lands.
+- Decoded coverage describes traversal of recorded metadata, not
+  source-version proof, runtime reachability, vulnerability affectedness, or
+  proven absence.
 - The word-40 gofunc path is fixture-executed on go1.25.7 and the word-43
   path on go1.27.3; intermediate 1.20-1.26 releases are layout-verified only.
 - `go tool nm` cannot corroborate symbols on this stripped binary; the
   oracles used were `go version -m`, `readelf`, `objdump`, and the local
   unstripped reproduction.
-- Decoded coverage describes traversal of recorded metadata, not
-  source-version proof, runtime reachability, vulnerability affectedness, or
-  proven absence.
+- The zero-header `textStart` resolution trusts the first credible
+  moduledata candidate (anchored on the pclntab address, region-sane,
+  section-mapped); a binary crafted to place a decoy moduledata ahead of the
+  real one in the scanned data sections could still mislead the base, within
+  the same untrusted-input threat model as the rest of the parser.
 
 ## Commands
 
@@ -144,7 +185,8 @@ rpm2cpio <rpm> | cpio -idm --no-absolute-filenames './usr/bin/crio'
 ```
 
 Scan (absolute Cargo path, empty `PATH`, sentinel set, never executes the
-target):
+target). The initial run wrote `crio-first-artifact.json` (exit 2); the
+fix-round recapture wrote `crio-first-artifact-fix1.json` (exit 0):
 
 ```sh
 cargo build --locked --release

@@ -96,10 +96,11 @@ proof, runtime reachability, vulnerability affectedness, or proven absence.
 A replacement is separate evidence, not a substitution of the original release.
 This tool makes no binary-wide completeness claim. Standalone function evidence
 is independent of optional build identity and module attribution.
-The first representative Red Hat artifact run is recorded (partially closed,
-with a pending vendored-parser decision) in
-[docs/validation/first-artifact.md](docs/validation/first-artifact.md); full
-first-artifact acceptance remains pending.
+The first representative Red Hat artifact is validated end to end — all
+core walks decoded, exit 0 — in
+[docs/validation/first-artifact.md](docs/validation/first-artifact.md),
+after the strict-textstart-v1 fix round closed the externally linked PIE
+text-base defect found by that run.
 
 Inline evidence comes from the per-function `FUNCDATA_InlTree` arrays addressed
 through the moduledata `gofunc` base. Decoding is gated to the go1.20+ table
