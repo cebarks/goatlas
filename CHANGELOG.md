@@ -4,6 +4,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.1.0] - 2026-11-10
+
 ### Added
 
 - GitHub Actions CI running the full `just check` gate (fixtures, tests,
@@ -55,3 +59,6 @@ All notable changes to this project are documented here.
   decoded empty module inventory.
 - Earlier non-header magic literals no longer mask intact later build-info
   headers during checked discovery.
+
+[Unreleased]: https://github.com/cebarks/golang-symbol/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/cebarks/golang-symbol/releases/tag/v0.1.0
