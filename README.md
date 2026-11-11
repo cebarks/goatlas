@@ -156,3 +156,13 @@ All Go commands use `GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off`; builds use
 Compiler diagnostics and the compiler version are recorded under `target/fixtures/`.
 Tests compare build identity with read-only `go version -m`; they invoke the scanner
 by its absolute Cargo path with empty PATH and never execute the target.
+
+## License
+
+This project is licensed under the [GNU Affero General Public License v3.0 only](LICENSE)
+(`AGPL-3.0-only`), at the owner's discretion for now.
+
+The vendored `unstrip` 1.2.0 sources under `vendor/unstrip/` are upstream
+`MIT OR Apache-2.0` code with their original license notices preserved; they are
+included compatibly under this project's license, and their local modifications
+are documented in `vendor/unstrip/PATCHES.md`.

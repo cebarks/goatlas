@@ -6,6 +6,7 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- AGPL-3.0-only project license with vendored unstrip licensing clarified.
 - Rust library and CLI for local, in-process recorded Go build-identity inventory
   using pinned unstrip 1.2.0 with the local strict-buildinfo-v1 patch.
 - Deterministic schema-version-1 JSON preserving module versions, replacements,
