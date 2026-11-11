@@ -14,7 +14,7 @@ fn module_report_preserves_identity_as_coverage_advances() {
     assert_eq!(j["coverage"]["inlining"]["state"], "decoded");
     assert_eq!(
         j["build"]["dependencies"][0]["path"],
-        "example.com/golang-symbol/fixturedep"
+        "example.com/goatlas/fixturedep"
     );
     assert_eq!(j["build"]["dependencies"][0]["version"], "v1.2.3");
     assert_eq!(j["build"]["replacements"][0]["to"]["path"], "../dependency");
@@ -62,7 +62,7 @@ fn unreadable_or_nonregular_input_has_no_json_and_exit_1() {
         .set_len((1 << 30) + 1)
         .unwrap();
     for path in [tmp.path().join("absent"), tmp.path().to_path_buf(), big] {
-        let out = Command::new(env!("CARGO_BIN_EXE_golang-symbol"))
+        let out = Command::new(env!("CARGO_BIN_EXE_goatlas"))
             .arg(path)
             .env("PATH", "")
             .output()
@@ -76,7 +76,7 @@ fn unreadable_or_nonregular_input_has_no_json_and_exit_1() {
 #[test]
 fn usage_and_version_are_not_scan_reports() {
     let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_golang-symbol"))
+        Command::new(env!("CARGO_BIN_EXE_goatlas"))
             .args(args)
             .env("PATH", "")
             .output()
@@ -92,7 +92,7 @@ fn usage_and_version_are_not_scan_reports() {
     assert!(
         String::from_utf8(help.stdout)
             .unwrap()
-            .starts_with("Usage: golang-symbol <FILE>")
+            .starts_with("Usage: goatlas <FILE>")
     );
     let version = run(&["--version"]);
     assert_eq!(version.status.code(), Some(0));
@@ -134,7 +134,7 @@ fn broken_go_is_a_setup_failure() {
 fn scan_does_not_execute_the_target() {
     let tmp = tempfile::tempdir().unwrap();
     let sentinel = tmp.path().join("executed");
-    let out = Command::new(env!("CARGO_BIN_EXE_golang-symbol"))
+    let out = Command::new(env!("CARGO_BIN_EXE_goatlas"))
         .arg(fixture("app.stripped"))
         .env("PATH", "")
         .env("GOLANG_SYMBOL_EXECUTION_SENTINEL", &sentinel)
@@ -160,11 +160,8 @@ fn fixture_identity_matches_go_version_m() {
     let (_, j) = run_json(&path);
     let version = text.lines().next().unwrap().rsplit_once(": ").unwrap().1;
     assert_eq!(j["artifact"]["go_version"], version);
-    assert!(text.contains("dep\texample.com/golang-symbol/fixturedep\tv1.2.3"));
+    assert!(text.contains("dep\texample.com/goatlas/fixturedep\tv1.2.3"));
     assert!(text.contains("=>\t../dependency"));
-    assert_eq!(
-        j["build"]["main"]["path"],
-        "example.com/golang-symbol/fixture"
-    );
+    assert_eq!(j["build"]["main"]["path"], "example.com/goatlas/fixture");
     assert_eq!(j["build"]["main"]["version"], "(devel)");
 }

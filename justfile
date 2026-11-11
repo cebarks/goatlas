@@ -12,8 +12,8 @@ fixtures-base:
     printf '%s\n' "$version" > target/fixtures/go-version.txt
     cd tests/fixtures/app
     export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
-    go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/golang-symbol/fixture=-m=2' -o ../../../target/fixtures/app.unstripped . 2> ../../../target/fixtures/unstripped.compiler.log
-    go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/golang-symbol/fixture=-m=2' -ldflags='-s -w' -o ../../../target/fixtures/app.stripped . 2> ../../../target/fixtures/stripped.compiler.log
+    go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/goatlas/fixture=-m=2' -o ../../../target/fixtures/app.unstripped . 2> ../../../target/fixtures/unstripped.compiler.log
+    go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/goatlas/fixture=-m=2' -ldflags='-s -w' -o ../../../target/fixtures/app.stripped . 2> ../../../target/fixtures/stripped.compiler.log
 
 fixtures-pie:
     #!/bin/sh
@@ -34,7 +34,7 @@ fixtures-oldgo:
     mise where go@1.25.7 >/dev/null
     mkdir -p target/fixtures
     cd tests/fixtures/app
-    mise exec go@1.25.7 -- env GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/golang-symbol/fixture=-m=2' -ldflags='-s -w' -o ../../../target/fixtures/app.word40.stripped . 2> ../../../target/fixtures/word40.compiler.log
+    mise exec go@1.25.7 -- env GOTOOLCHAIN=local GOPROXY=off GOSUMDB=off GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/goatlas/fixture=-m=2' -ldflags='-s -w' -o ../../../target/fixtures/app.word40.stripped . 2> ../../../target/fixtures/word40.compiler.log
     mise exec go@1.25.7 -- go version > ../../../target/fixtures/word40-go-version.txt
 
 # app.extpie.stripped exercises the externally linked PIE layout: CGO with
@@ -61,7 +61,7 @@ fixtures-noinline:
     mkdir -p target/fixtures
     cd tests/fixtures/app
     export GOOS=linux GOARCH=amd64 CGO_ENABLED=0
-    go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/golang-symbol/fixture=-l' -ldflags='-s -w' -o ../../../target/fixtures/app.noinline . 2> ../../../target/fixtures/noinline.compiler.log
+    go build -mod=readonly -trimpath -buildvcs=false -gcflags='example.com/goatlas/fixture=-l' -ldflags='-s -w' -o ../../../target/fixtures/app.noinline . 2> ../../../target/fixtures/noinline.compiler.log
 
 test: fixtures
     cargo test --locked

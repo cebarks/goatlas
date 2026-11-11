@@ -1,7 +1,7 @@
 mod common;
 
 use common::{fixture, run_json};
-use golang_symbol::{CoverageState, exit_code, scan_bytes, scan_file};
+use goatlas::{CoverageState, exit_code, scan_bytes, scan_file};
 use std::collections::BTreeSet;
 use unstrip::{GoBinary, Pclntab};
 
@@ -29,7 +29,7 @@ fn reflection_only_implementation_survives_stripping() {
         .unwrap();
     assert_eq!(
         direct.file.as_deref(),
-        Some("example.com/golang-symbol/fixture/main.go")
+        Some("example.com/goatlas/fixture/main.go")
     );
     assert_eq!(exit_code(&r), 0);
     assert!(r.functions.iter().all(|f| f.size_bytes > 0));
@@ -59,9 +59,7 @@ fn stripped_and_unstripped_have_the_same_function_identities() {
     assert_eq!(names_a, names_b);
 }
 
-fn mutate(
-    change: impl FnOnce(&GoBinary, &Pclntab<'_>, &mut Vec<u8>),
-) -> (golang_symbol::Inventory, u64) {
+fn mutate(change: impl FnOnce(&GoBinary, &Pclntab<'_>, &mut Vec<u8>)) -> (goatlas::Inventory, u64) {
     let bin = GoBinary::open(fixture("app.stripped")).unwrap();
     let pcln = Pclntab::parse(&bin).unwrap();
     assert!(pcln.magic_is_official());

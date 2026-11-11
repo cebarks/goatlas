@@ -1,7 +1,7 @@
-module example.com/golang-symbol/fixture
+module example.com/goatlas/fixture
 
 go 1.20
 
-require example.com/golang-symbol/fixturedep v1.2.3
+require example.com/goatlas/fixturedep v1.2.3
 
-replace example.com/golang-symbol/fixturedep => ../dependency
+replace example.com/goatlas/fixturedep => ../dependency

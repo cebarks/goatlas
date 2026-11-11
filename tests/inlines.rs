@@ -3,8 +3,8 @@
 mod common;
 
 use common::fixture;
-use golang_symbol::report::InlineOccurrence;
-use golang_symbol::{CoverageState, exit_code, scan_bytes, scan_file};
+use goatlas::report::InlineOccurrence;
+use goatlas::{CoverageState, exit_code, scan_bytes, scan_file};
 use std::collections::HashSet;
 use unstrip::{GoBinary, Pclntab};
 

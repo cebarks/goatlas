@@ -5,7 +5,7 @@ import (
 	"os"
 	"reflect"
 
-	"example.com/golang-symbol/fixturedep"
+	"example.com/goatlas/fixturedep"
 )
 
 //go:noinline

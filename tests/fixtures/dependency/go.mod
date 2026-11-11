@@ -1,3 +1,3 @@
-module example.com/golang-symbol/fixturedep
+module example.com/goatlas/fixturedep
 
 go 1.20

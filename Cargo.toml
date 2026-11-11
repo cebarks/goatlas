@@ -1,9 +1,9 @@
 [package]
-name = "golang-symbol"
+name = "goatlas"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-only"
-repository = "https://github.com/cebarks/golang-symbol"
+repository = "https://github.com/cebarks/goatlas"
 description = "Inventory recorded Go module identity and retained function evidence from Linux ELF x86-64 binaries without executing them"
 
 [dependencies]

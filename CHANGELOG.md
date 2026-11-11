@@ -60,5 +60,5 @@ _Nothing yet._
 - Earlier non-header magic literals no longer mask intact later build-info
   headers during checked discovery.
 
-[Unreleased]: https://github.com/cebarks/golang-symbol/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/cebarks/golang-symbol/releases/tag/v0.1.0
+[Unreleased]: https://github.com/cebarks/goatlas/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/cebarks/goatlas/releases/tag/v0.1.0

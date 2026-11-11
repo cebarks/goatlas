@@ -17,7 +17,7 @@ pub fn fixture(name: &str) -> PathBuf {
 // module without using every helper.
 #[allow(dead_code)]
 pub fn run_json(path: &Path) -> (Output, serde_json::Value) {
-    let out = Command::new(env!("CARGO_BIN_EXE_golang-symbol"))
+    let out = Command::new(env!("CARGO_BIN_EXE_goatlas"))
         .arg(path)
         .env("PATH", "")
         .output()

@@ -1,6 +1,6 @@
-# golang-symbol
+# goatlas
 
-[![CI](https://github.com/cebarks/golang-symbol/actions/workflows/ci.yml/badge.svg)](https://github.com/cebarks/golang-symbol/actions/workflows/ci.yml)
+[![CI](https://github.com/cebarks/goatlas/actions/workflows/ci.yml/badge.svg)](https://github.com/cebarks/goatlas/actions/workflows/ci.yml)
 
 Offline inventory of recorded Go build identity and retained standalone function
 and inline-call evidence in a local executable. The initial validated profile is
@@ -16,7 +16,7 @@ Build with a current Rust toolchain (Rust 2024 edition support required):
 
 ```sh
 cargo build --locked --release
-./target/release/golang-symbol /path/to/executable
+./target/release/goatlas /path/to/executable
 ```
 
 Pass exactly one file path. `--help` and `--version` print plain text, not inventory

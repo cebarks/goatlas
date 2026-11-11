@@ -1,7 +1,7 @@
 mod common;
 
 use common::{fixture, run_json};
-use golang_symbol::{CoverageState, exit_code, scan_bytes};
+use goatlas::{CoverageState, exit_code, scan_bytes};
 use std::process::Command;
 
 const MAGIC: &[u8] = b"\xff Go buildinf:";
@@ -204,7 +204,7 @@ fn short_build_header_is_reported_not_panicked() {
     let temp = tempfile::tempdir().unwrap();
     let path = temp.path().join("short header");
     std::fs::write(&path, &bytes).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_golang-symbol"))
+    let out = Command::new(env!("CARGO_BIN_EXE_goatlas"))
         .arg(&path)
         .env("PATH", "")
         .output()

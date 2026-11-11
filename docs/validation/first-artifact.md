@@ -1,6 +1,6 @@
 # First Red Hat artifact validation
 
-First real-artifact run of the golang-symbol CLI (schema v1, producer patch
+First real-artifact run of the goatlas CLI (schema v1, producer patch
 `strict-buildinfo-v1+strict-inline-v1`) against an owner-supplied Red Hat
 Enterprise Linux Go binary, followed by an owner-authorized fix round that
 added the `strict-textstart-v1` vendored patch and recaptured the artifact.
@@ -51,7 +51,7 @@ closed first:
 
 ## Capture and cross-checks
 
-Scanner: release build of golang-symbol 0.1.0, invoked by absolute path with
+Scanner: release build of goatlas 0.1.0, invoked by absolute path with
 an empty `PATH` and an execution sentinel set; the sentinel was never
 created. Output: one JSON object under `target/acceptance/`, actual exit code
 **2** (valid report, partial coverage).
@@ -191,7 +191,7 @@ fix-round recapture wrote `crio-first-artifact-fix1.json` (exit 0):
 ```sh
 cargo build --locked --release
 env -i GOLANG_SYMBOL_EXECUTION_SENTINEL=<sentinel> \
-  <repo>/target/release/golang-symbol <extracted>/usr/bin/crio \
+  <repo>/target/release/goatlas <extracted>/usr/bin/crio \
   > target/acceptance/crio-first-artifact.json
 ```
 
