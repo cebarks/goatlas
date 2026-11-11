@@ -1,5 +1,7 @@
 # golang-symbol
 
+[![CI](https://github.com/cebarks/golang-symbol/actions/workflows/ci.yml/badge.svg)](https://github.com/cebarks/golang-symbol/actions/workflows/ci.yml)
+
 Offline inventory of recorded Go build identity and retained standalone function
 and inline-call evidence in a local executable. The initial validated profile is
 ordinary gc-compiled Linux ELF x86-64, including binaries
