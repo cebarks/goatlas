@@ -48,10 +48,12 @@ Unknown/development versions and embedded paths
 and `vcs.time` remain unchanged. The scanning host's input path and analysis time
 are not added. Reports may contain sensitive embedded provenance.
 
-The parser is pinned to `unstrip =1.2.0` with the local `strict-buildinfo-v1`
-and `strict-inline-v1` checked patches (combined producer identity
-`strict-buildinfo-v1+strict-inline-v1`). Their upstream checksum, revision,
-licenses, exact patch scope and replacement criteria are documented in
+The parser is pinned to `unstrip =1.2.0` with the local `strict-buildinfo-v1`,
+`strict-inline-v1` and `strict-textstart-v1` checked patches (combined
+producer identity
+`strict-buildinfo-v1+strict-inline-v1+strict-textstart-v1`). Their upstream
+checksum, revision, licenses, exact patch scope and replacement criteria are
+documented in
 [vendor/unstrip/PATCHES.md](vendor/unstrip/PATCHES.md).
 Unsupported targets and unrecovered metadata yield unavailable coverage with
 issues, not a clean empty inventory. When a raw Go version survives but module
@@ -80,14 +82,14 @@ body spans yield partial coverage with explicit issues, never a silently
 shortened "decoded" walk.
 For externally linked PIE builds (CGO with `-linkmode=external`), the pclntab
 header's `textStart` is zero in the file — the runtime fills it by relocation —
-and the vendored parser falls back to the first executable section's address,
-which precedes the Go text once C runtime init/PLT sections are present. For
-such binaries the reported `entry` and `container_entry` virtual addresses are
-shifted accordingly, and spans crossing those sections are conservatively
-rejected. Function and inline identity, sizes and file/line evidence are
-unaffected (they are entryOff- and funcdata-relative). The measured impact on
-the first Red Hat artifact and the pending vendor-patch decision are recorded
-in [docs/validation/first-artifact.md](docs/validation/first-artifact.md).
+so the base is resolved from the statically present `moduledata.text` (the
+runtime's own base for functab entryOff arithmetic) via the
+`strict-textstart-v1` vendored patch; a non-zero header value is used
+verbatim and a missing or incredible moduledata candidate keeps the
+`.text` section fallback. A permanent externally linked PIE fixture pins
+correct entry VAs against the moduledata base. Details and the measured
+impact on the first Red Hat artifact are recorded in
+[docs/validation/first-artifact.md](docs/validation/first-artifact.md).
 
 Decoded coverage describes traversal of recorded metadata, not source-version
 proof, runtime reachability, vulnerability affectedness, or proven absence.
@@ -138,7 +140,8 @@ just fixtures-base  # builds unstripped/stripped Linux amd64 fixtures; never run
 just fixtures-pie   # builds the stripped PIE fixture variant
 just fixtures-noinline  # builds the stripped fixture with package inlining disabled
 just fixtures-oldgo  # builds the stripped pre-1.27 (word-40) fixture with pinned mise go1.25.7
-just fixtures       # fixtures-base + fixtures-pie + fixtures-noinline + fixtures-oldgo
+just fixtures-extpie  # builds the stripped externally linked PIE fixture (CGO, gcc required)
+just fixtures       # fixtures-base + fixtures-pie + fixtures-noinline + fixtures-oldgo + fixtures-extpie
 just test           # fixtures, cargo test --locked
 just patch-check    # full vendor formatting, locked library tests, strict library Clippy
 just check          # test, patch-check, application formatting and strict Clippy

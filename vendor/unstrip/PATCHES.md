@@ -87,6 +87,37 @@ is not a version-wide support claim: the 16-byte `runtime.inlinedCall`
 layout is decoded only for the go1.20+ table magic, and the application
 additionally gates on the recorded Go version family.
 
+## Functional patch: strict-textstart-v1
+The pclntab changes are confined to `src/pclntab/mod.rs`, with self-contained
+synthetic regressions in the same module and a fixture-backed regression in
+the application's `tests/functions.rs` (`app.extpie.stripped`, built with
+CGO and `-linkmode=external -buildmode=pie`):
+- When the modern-layout pclntab header's `textStart` is zero in the file —
+  which happens for externally linked PIEs (an `R_X86_64_RELATIVE`
+  relocation fills it at load) and some internal links — resolve the text
+  base from the statically present `moduledata.text` (word 22 from the
+  pclntab-anchored candidate) instead of the first executable section's
+  address. The runtime's own functab `entryOff` arithmetic is
+  `moduledata.text + entryOff`, so this is the runtime's base, statically
+  available; `go tool nm` ground truth on a stock-toolchain external-PIE
+  reproduction and the moduledata `minpc`/`etext` sanity on the first real
+  Red Hat artifact both confirm it.
+- The moduledata candidate is found by scanning the data sections
+  (noptrdata, data, rodata, in that order) for the pclntab address anchor,
+  mirroring the moduledata locator, and must pass the runtime's region
+  sanity (`minpc <= maxpc`, nonzero `text <= etext`) with a section-mapped
+  text base; otherwise it is rejected structurally.
+- A non-zero header `textStart` keeps the previous behavior verbatim, and a
+  missing or incredible moduledata candidate keeps the previous `.text`
+  section fallback. Pre-1.18 layouts (absolute functab entries) are
+  untouched.
+This is not a general parser-hardening or crash-proof-parsing claim. Remove
+the strict-textstart-v1 portion only when an upstream release resolves a
+zero header `textStart` to the true Go text base (or documents an equivalent
+static resolution), and both the vendor pclntab tests and the application's
+external-PIE regression pass against that release without weakening their
+assertions.
+
 ## Separately authorized mechanical hygiene
 
 The published baseline did not pass full rustfmt and library Clippy on the tested
@@ -115,4 +146,6 @@ issues, count-establishing pcdata scans, retained prefixes and observable caps
 — and both the vendor inline tests and the application inline regressions pass
 without weakening their assertions. Revisit provenance and the producer patch
 label as part of that change; do not silently substitute version-only legacy
-parse for the checked API.
+parse for the checked API. The combined producer identity reported by the
+application after all three slices is
+`strict-buildinfo-v1+strict-inline-v1+strict-textstart-v1`.

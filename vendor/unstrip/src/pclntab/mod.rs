@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::error::Error;
-use crate::gobin::GoBinary;
+use crate::gobin::{GoBinary, SectionKind};
 use crate::Result;
 
 pub const MAGIC_1_20: u32 = 0xfffffff1;
@@ -198,12 +198,17 @@ impl<'a> Pclntab<'a> {
             }
         }
 
-        // textStart in the header is the runtime-resolved VA. If the binary sets
-        // it to zero (rare, but happens for some shared objects), fall back to the
-        // .text section address from the container. Only meaningful for Modern;
-        // Pre118 functab entries are absolute, so text_start stays 0 there.
+        // textStart in the header is the runtime-resolved VA. Some toolchains
+        // and externally linked PIE builds leave it zero in the file — the
+        // dynamic linker fills it from an R_X86_64_RELATIVE relocation at
+        // load time — so a static reader must recover the base another way.
+        // Resolve it from the statically present moduledata.text (the
+        // runtime's own base for functab entryOff resolution); a missing or
+        // incredible candidate keeps the .text section fallback. Only
+        // meaningful for Modern; Pre118 functab entries are absolute, so
+        // text_start stays 0 there.
         let text_start = if layout == Layout::Modern && text_start == 0 {
-            bin.text_addr
+            resolve_zero_text_start(bin).unwrap_or(bin.text_addr)
         } else {
             text_start
         };
@@ -970,6 +975,85 @@ fn read_cstring(buf: &[u8], off: usize) -> Result<String> {
         .map_err(|_| Error::BadString { offset: off })
 }
 
+/// Resolve the Go text base when the pclntab header's `textStart` is zero.
+///
+/// Externally linked PIE builds (and some internal links) leave `textStart`
+/// zero in the file because the dynamic linker fills it from an
+/// `R_X86_64_RELATIVE` relocation at load time. The runtime's own base for
+/// functab `entryOff` resolution is `moduledata.text`, which the linker
+/// writes as the link-time VA and which is therefore statically present.
+/// Scan the data sections for a moduledata candidate anchored on the
+/// pclntab address, apply the runtime's region sanity, and require the
+/// candidate text to be mapped by a section. The first credible candidate
+/// wins; a missing or incredible one yields None so the caller keeps its
+/// previous fallback.
+fn resolve_zero_text_start(bin: &GoBinary) -> Option<u64> {
+    if bin.pclntab_addr == 0 {
+        return None;
+    }
+    let ps = bin.pointer_size();
+    let mut anchor = vec![0u8; ps];
+    match (ps, bin.little_endian) {
+        (8, true) => anchor.copy_from_slice(&bin.pclntab_addr.to_le_bytes()),
+        (8, false) => anchor.copy_from_slice(&bin.pclntab_addr.to_be_bytes()),
+        (_, true) => anchor.copy_from_slice(&(bin.pclntab_addr as u32).to_le_bytes()),
+        (_, false) => anchor.copy_from_slice(&(bin.pclntab_addr as u32).to_be_bytes()),
+    }
+    for kind in [
+        SectionKind::NoPtrData,
+        SectionKind::Data,
+        SectionKind::ReadOnlyData,
+    ] {
+        for section in bin.sections.iter().filter(|s| s.kind == kind) {
+            let Some(end) = section.file_offset.checked_add(section.file_size) else {
+                continue;
+            };
+            if end > bin.bytes.len() {
+                continue;
+            }
+            let buf = &bin.bytes[section.file_offset..end];
+            let mut pos = 0;
+            while buf.len() - pos >= ps {
+                if buf[pos..pos + ps] == anchor[..] {
+                    if let Some(text) =
+                        candidate_moduledata_text(bin, section.file_offset + pos, ps)
+                    {
+                        return Some(text);
+                    }
+                }
+                pos += ps;
+            }
+        }
+    }
+    None
+}
+
+/// Read and validate `moduledata.text` (word 22) from an anchored moduledata
+/// candidate. Region sanity the runtime guarantees: `minpc <= maxpc`, a
+/// nonzero `text <= etext`, and a text base mapped by some section. A wrong
+/// or corrupt candidate is rejected structurally rather than trusted.
+fn candidate_moduledata_text(bin: &GoBinary, file_off: usize, ps: usize) -> Option<u64> {
+    let bytes = &bin.bytes;
+    let word = |index: usize| -> Option<u64> {
+        let at = file_off.checked_add(index.checked_mul(ps)?)?;
+        let end = at.checked_add(ps)?;
+        let slice = bytes.get(at..end)?;
+        Some(match (ps, bin.little_endian) {
+            (8, true) => u64::from_le_bytes(slice.try_into().ok()?),
+            (8, false) => u64::from_be_bytes(slice.try_into().ok()?),
+            (_, true) => u32::from_le_bytes(slice.try_into().ok()?) as u64,
+            (_, false) => u32::from_be_bytes(slice.try_into().ok()?) as u64,
+        })
+    };
+    let (minpc, maxpc) = (word(20)?, word(21)?);
+    let (text, etext) = (word(22)?, word(23)?);
+    if minpc > maxpc || text == 0 || text > etext {
+        return None;
+    }
+    bin.section_for_addr(text)?;
+    Some(text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1157,5 +1241,102 @@ mod tests {
                 assert!(res.is_ok(), "parse chain panicked on a hostile pclntab");
             }
         }
+    }
+
+    /// Synthetic modern-layout binary with a zeroed header textStart and an
+    /// optional moduledata candidate anchored on the pclntab address in a
+    /// data section. `.text` (the old fallback base) deliberately sits below
+    /// the moduledata text so the two derivations are distinguishable.
+    fn zero_textstart_bin(
+        moduledata: Option<(u64, u64, u64, u64)>,
+        header_text_start: u64,
+    ) -> GoBinary {
+        use crate::gobin::{Arch, Container, Section, SectionKind};
+        // pclntab blob [0x000..0x800): modern header with in-range offsets.
+        let mut bytes = vec![0u8; 0x900];
+        bytes[0..4].copy_from_slice(&MAGIC_1_20.to_le_bytes());
+        bytes[6] = 1; // quantum
+        bytes[7] = 8; // ptr size
+        bytes[8..16].copy_from_slice(&0u64.to_le_bytes()); // nfunc
+        bytes[16..24].copy_from_slice(&0u64.to_le_bytes()); // nfiles
+        bytes[24..32].copy_from_slice(&header_text_start.to_le_bytes());
+        for off in [40u16, 48, 56, 64] {
+            bytes[off as usize..off as usize + 8].copy_from_slice(&0x100u64.to_le_bytes());
+        }
+        // moduledata region [0x800..0x900) inside a data section.
+        if let Some((minpc, maxpc, text, etext)) = moduledata {
+            let md = 0x800;
+            bytes[md..md + 8].copy_from_slice(&0x2000u64.to_le_bytes()); // pclntab anchor
+            for (word, value) in [(20usize, minpc), (21, maxpc), (22, text), (23, etext)] {
+                let at = md + word * 8;
+                bytes[at..at + 8].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        GoBinary {
+            bytes,
+            container: Container::Elf,
+            arch: Arch::X86_64,
+            little_endian: true,
+            ptr_size: 8,
+            sections: vec![
+                Section {
+                    name: ".text".to_string(),
+                    kind: SectionKind::Text,
+                    file_offset: 0,
+                    file_size: 0x10,
+                    addr: 0x1000,
+                    vmsize: 0x1000,
+                },
+                Section {
+                    name: ".go.module".to_string(),
+                    kind: SectionKind::Data,
+                    file_offset: 0x800,
+                    file_size: 0x100,
+                    addr: 0x3000,
+                    vmsize: 0x100,
+                },
+            ],
+            pclntab_offset: 0,
+            pclntab_size: 0x800,
+            pclntab_addr: 0x2000,
+            text_addr: 0x1000,
+        }
+    }
+
+    #[test]
+    fn zero_header_textstart_resolves_moduledata_text() {
+        // Externally linked PIEs leave textStart zero in the file; the true
+        // base is the statically present moduledata.text (word 22), not the
+        // first executable section.
+        let bin = zero_textstart_bin(Some((0x1040, 0x1f00, 0x1040, 0x2000)), 0);
+        let pcln = Pclntab::parse(&bin).expect("parse synthetic pclntab");
+        assert_eq!(pcln.text_start(), 0x1040);
+    }
+
+    #[test]
+    fn nonzero_header_textstart_is_kept_verbatim() {
+        // A non-zero header value is the runtime-resolved VA; it must win
+        // over any moduledata candidate.
+        let bin = zero_textstart_bin(Some((0x1040, 0x1f00, 0x1040, 0x2000)), 0x5000);
+        let pcln = Pclntab::parse(&bin).expect("parse synthetic pclntab");
+        assert_eq!(pcln.text_start(), 0x5000);
+    }
+
+    #[test]
+    fn zero_header_textstart_without_moduledata_keeps_text_fallback() {
+        // No anchored moduledata candidate: the previous .text section
+        // fallback still applies.
+        let bin = zero_textstart_bin(None, 0);
+        let pcln = Pclntab::parse(&bin).expect("parse synthetic pclntab");
+        assert_eq!(pcln.text_start(), 0x1000);
+    }
+
+    #[test]
+    fn zero_header_textstart_with_unmappable_moduledata_text_keeps_fallback() {
+        // A candidate whose text word is not mapped by any section is not a
+        // credible moduledata; keep the fallback rather than trust it.
+        let bin = zero_textstart_bin(Some((0x1040, 0x1f00, 0x9000_0000, 0xa000_0000)), 0);
+        let pcln = Pclntab::parse(&bin).expect("parse synthetic pclntab");
+        assert_eq!(pcln.text_start(), 0x1000);
     }
 }

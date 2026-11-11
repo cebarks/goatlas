@@ -53,7 +53,9 @@ pub fn scan_bytes(bytes: Vec<u8>) -> Result<Inventory, ScanError> {
         producer: Producer {
             tool_version: env!("CARGO_PKG_VERSION").into(),
             extractor_version: "1.2.0".into(),
-            extractor_patch: Some("strict-buildinfo-v1+strict-inline-v1".into()),
+            extractor_patch: Some(
+                "strict-buildinfo-v1+strict-inline-v1+strict-textstart-v1".into(),
+            ),
         },
         artifact: Artifact {
             sha256: Sha256::digest(&bytes)

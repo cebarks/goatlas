@@ -26,7 +26,7 @@ fn extractor_patch_identity_is_explicit() {
     assert_eq!(j["producer"]["extractor_version"], "1.2.0");
     assert_eq!(
         j["producer"]["extractor_patch"],
-        "strict-buildinfo-v1+strict-inline-v1"
+        "strict-buildinfo-v1+strict-inline-v1+strict-textstart-v1"
     );
     assert_eq!(j["coverage"]["build_info"]["expected"], 1);
     assert_eq!(j["coverage"]["build_info"]["visited"], 1);

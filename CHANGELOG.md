@@ -35,6 +35,11 @@ All notable changes to this project are documented here.
   implementation evidence. Malformed/skipped rows produce incomplete coverage.
 - Vendored inline decoder now reports truncated or unlocatable inline trees as
   explicit errors instead of clean empty successes (strict-inline-v1 patch).
+- Vendored pclntab now resolves a zero header textStart from the statically
+  present moduledata text base instead of the first executable section, so
+  externally linked PIE builds report correct entry and container virtual
+  addresses (strict-textstart-v1 patch); external-PIE fixture regression
+  included.
 - Vendored parser provenance, licenses, self-contained checked build-info and
   inline tests, and strict vendor formatting/library-test/Clippy gate.
 

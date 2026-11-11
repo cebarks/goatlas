@@ -138,3 +138,60 @@ fn functions_survive_missing_build_info() {
     assert_eq!(r.coverage.functions.state, CoverageState::Decoded);
     assert!(r.functions.iter().any(|f| f.raw_name == "main.directKeep"));
 }
+
+/// Test-only ground truth: the runtime text base recorded statically in
+/// moduledata (word 22, counting words from the pclntab pointer anchor). Go
+/// 1.26+ emits the moduledata in a dedicated `.go.module` section starting
+/// exactly at the anchor.
+fn moduledata_text(bin: &GoBinary) -> u64 {
+    let section = bin
+        .sections
+        .iter()
+        .find(|s| s.name == ".go.module")
+        .expect("fixture carries a .go.module section");
+    let off = section.file_offset + 22 * 8;
+    u64::from_le_bytes(bin.bytes[off..off + 8].try_into().unwrap())
+}
+
+#[test]
+fn externally_linked_pie_entries_use_the_moduledata_text_base() {
+    // CGO with -linkmode=external places .init/.plt before .text and C
+    // runtime code before the Go text inside .text, while the pclntab
+    // header's textStart stays zero in the file (the dynamic linker fills it
+    // by relocation). Function entries must resolve through moduledata.text
+    // — the runtime's own base for functab entryOff — never through the
+    // first executable section.
+    let path = fixture("app.extpie.stripped");
+    let (out, j) = run_json(&path);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(j["coverage"]["functions"]["state"], "decoded");
+    assert_eq!(j["coverage"]["inlining"]["state"], "decoded");
+
+    let bin = GoBinary::open(&path).unwrap();
+    let base = moduledata_text(&bin);
+    let text = bin
+        .sections
+        .iter()
+        .find(|s| s.name == ".text")
+        .expect(".text section");
+    assert!(
+        base >= text.addr && base < text.addr + text.vmsize,
+        "moduledata text base {base:#x} must lie inside .text"
+    );
+    // The first Go function's entry is the base itself (entryOff 0).
+    let functions = j["functions"].as_array().unwrap();
+    assert!(
+        functions
+            .iter()
+            .any(|f| f["entry"] == format!("0x{base:016x}")),
+        "no function entry equals the moduledata text base {base:#x}"
+    );
+    // No entry may fall below the Go text base (the old .init fallback put
+    // the first rows into .init/.plt).
+    for f in functions {
+        let entry =
+            u64::from_str_radix(f["entry"].as_str().unwrap().strip_prefix("0x").unwrap(), 16)
+                .unwrap();
+        assert!(entry >= base, "entry {entry:#x} is below the Go text base");
+    }
+}
